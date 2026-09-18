@@ -49,8 +49,8 @@ const visibleEvents = computed(() => {
         <div class="event-main">
           <div class="event-key">
             <code>{{ event.stableKey }}</code>
-            <el-tag size="small" effect="plain">{{ categoryLabels[event.category || 'unknown'] || event.category }}</el-tag>
-            <el-tag v-if="(event.triggerCount ?? 1) > 1" size="small" type="warning" effect="plain">触发 {{ event.triggerCount }} 次</el-tag>
+            <el-tag size="small" effect="plain" disable-transitions>{{ categoryLabels[event.category || 'unknown'] || event.category }}</el-tag>
+            <el-tag v-if="(event.triggerCount ?? 1) > 1" size="small" type="warning" effect="plain" disable-transitions>触发 {{ event.triggerCount }} 次</el-tag>
           </div>
           <div class="event-source">{{ event.sourcePath || event.sourceObject || '未知来源' }}</div>
           <div class="event-meta">最近 #{{ event.sequence }} · {{ event.origin || 'unknown' }} · {{ formatDuration(event.durationMs) }}</div>
