@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "enabled": true,
+  "mode": "replace",
+  "replaceStrategy": "skip_original",
+  "blockedSourcePrefixes": ["SoundLayerdRandomGenerator"],
+  "fallbackToOriginal": true,
+  "groups": [
+    {
+      "id": "player_voice",
+      "name": "Player Voice",
+      "enabled": true,
+      "audioDirectory": "VoiceController\\Groups\\player-voice\\Audio",
+      "rules": [
+        {
+          "id": "target_voice",
+          "eventId": "3499935827",
+          "triggerId": "114982064",
+          "cooldownMs": 200,
+          "maxConcurrent": 2,
+          "candidates": [
+            {
+              "file": "VoiceController\\Groups\\player-voice\\Audio\\vc-overlay-test.wav",
+              "weight": 1,
+              "volume": 0.12,
+              "speed": 1.0,
+              "maxDurationMs": 700
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

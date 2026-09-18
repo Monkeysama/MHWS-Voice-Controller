@@ -1,0 +1,30 @@
+{
+  "manifestVersion": 1,
+  "id": "voice-controller",
+  "name": "Voice Controller",
+  "localizedName": {"zh-CN": "语音控制器", "en-US": "Voice Controller"},
+  "version": "0.1.0",
+  "reffApi": ">=0.1.0 <0.2.0",
+  "games": ["MHWILDS"],
+  "ui": {"kind": "page", "mode": "isolated-page", "entry": "ui/dist/index.html"},
+  "methods": [
+    "voice-controller.get-state",
+    "voice-controller.save-event",
+    "voice-controller.remove-saved-event",
+    "voice-controller.play-event",
+    "voice-controller.add-group",
+    "voice-controller.update-group",
+    "voice-controller.update-blocked-sources",
+    "voice-controller.remove-group",
+    "voice-controller.add-rule-from-saved",
+    "voice-controller.update-rule",
+    "voice-controller.remove-rule",
+    "voice-controller.add-candidate",
+    "voice-controller.update-candidate",
+    "voice-controller.remove-candidate",
+    "voice-controller.test-candidate",
+    "voice-controller.save"
+  ],
+  "events": ["voice-controller.changed"],
+  "fallback": "none"
+}

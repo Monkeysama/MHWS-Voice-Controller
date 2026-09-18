@@ -1,0 +1,24 @@
+:root {
+  --vc-bg: var(--reff-bg, #10151e);
+  --vc-bg-soft: var(--reff-surface, #151d28);
+  --vc-surface: var(--reff-card, #1a2431);
+  --vc-border: var(--reff-border, #2d3b4d);
+  --vc-text: var(--reff-text, #e9eef6);
+  --vc-muted: var(--reff-muted, #91a0b5);
+  --vc-accent: var(--reff-accent, #67d3b2);
+  --vc-accent-strong: var(--reff-accent-strong, #82e2c5);
+  --vc-accent-soft: color-mix(in srgb, var(--reff-accent, #67d3b2) 14%, var(--reff-card, #1a2431));
+}
+
+* { box-sizing: border-box; }
+html, body, #app { width: 100%; min-height: 100%; margin: 0; }
+body { color: var(--vc-text); background: var(--vc-bg); }
+button, input, select, textarea { letter-spacing: 0; }
+.voice-controller-page { width: 100%; min-height: 100vh; background: var(--vc-bg); }
+.workspace-tabs > .el-tabs__header { margin: 0; padding: 0 20px; border-bottom: 1px solid var(--vc-border); }
+.workspace-tabs > .el-tabs__header .el-tabs__nav-wrap::after { display: none; }
+.workspace-tabs > .el-tabs__content { overflow: visible; }
+.el-button { border-radius: 5px; }
+.el-input__wrapper, .el-select__wrapper { border-radius: 5px; }
+code { font-family: "Cascadia Mono", "Consolas", monospace; }
+@media (max-width: 620px) { .workspace-tabs > .el-tabs__header { padding: 0 12px; } }

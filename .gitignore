@@ -1,0 +1,5 @@
+.learnings/
+docs/
+AGENTS.md
+web/voice-controller/node_modules/
+reframework/reff/plugins/voice-controller/.reff-dev-version
