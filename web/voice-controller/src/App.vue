@@ -20,7 +20,6 @@ const visibleEvents = computed(() => controller.events.value);
   <main class="voice-controller-page">
     <StatusPanel
       :state="controller.state.value"
-      :connected="controller.connected.value"
       :loading="controller.loading.value"
       :error="controller.error.value"
     />
