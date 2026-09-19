@@ -11,8 +11,15 @@ const emit = defineEmits<{
 const query = shallowRef('');
 const category = shallowRef('all');
 const categoryStartSequence = shallowRef(0);
+const categoryBaselineCounts = shallowRef<Record<string, number>>({});
 const categoryLabels: Record<string, string> = {player: '玩家', npc: 'NPC', otomo: '坐骑', weapon: '武器', unknown: '未分类'};
 function formatDuration(durationMs?: number) { return durationMs ? `${(durationMs / 1000).toFixed(2)} 秒` : '时长待获取'; }
+// 筛选切换后，旧事件仍可能在后端分类队列中被更新；显示时扣除切换前基线，避免触发次数跨筛选累加。
+function displayTriggerCount(event: AudioEvent) {
+  const current = Number(event.triggerCount ?? 1);
+  const baseline = categoryBaselineCounts.value[event.stableKey] ?? 0;
+  return Math.max(1, current - baseline);
+}
 // REFF 宿主切换标签页后可能重新接管 wheel 事件；显式把增量交给近期事件容器，避免滚动上下文漂移。
 function handleListWheel(event: WheelEvent) {
   const list = event.currentTarget as HTMLElement | null;
@@ -23,6 +30,9 @@ function handleListWheel(event: WheelEvent) {
 }
 watch(category, () => {
   categoryStartSequence.value = Math.max(0, ...props.events.map(event => event.sequence ?? 0));
+  const baseline: Record<string, number> = {};
+  for (const event of props.events) baseline[event.stableKey] = Number(event.triggerCount ?? 1);
+  categoryBaselineCounts.value = baseline;
 });
 const visibleEvents = computed(() => {
   const needle = query.value.trim().toLowerCase();
@@ -58,7 +68,7 @@ const visibleEvents = computed(() => {
           <div class="event-key">
             <code>{{ event.stableKey }}</code>
             <el-tag size="small" effect="plain" disable-transitions>{{ categoryLabels[event.category || 'unknown'] || event.category }}</el-tag>
-            <el-tag v-if="(event.triggerCount ?? 1) > 1" size="small" type="warning" effect="plain" disable-transitions>触发 {{ event.triggerCount }} 次</el-tag>
+            <el-tag v-if="displayTriggerCount(event) > 1" size="small" type="warning" effect="plain" disable-transitions>触发 {{ displayTriggerCount(event) }} 次</el-tag>
           </div>
           <div class="event-source">{{ event.sourcePath || event.sourceObject || '未知来源' }}</div>
           <div class="event-meta">最近 #{{ event.sequence }} · {{ event.origin || 'unknown' }} · {{ formatDuration(event.durationMs) }}</div>
