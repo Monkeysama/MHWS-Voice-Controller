@@ -13,6 +13,14 @@ const category = shallowRef('all');
 const categoryStartSequence = shallowRef(0);
 const categoryLabels: Record<string, string> = {player: '玩家', npc: 'NPC', otomo: '坐骑', weapon: '武器', unknown: '未分类'};
 function formatDuration(durationMs?: number) { return durationMs ? `${(durationMs / 1000).toFixed(2)} 秒` : '时长待获取'; }
+// REFF 宿主切换标签页后可能重新接管 wheel 事件；显式把增量交给近期事件容器，避免滚动上下文漂移。
+function handleListWheel(event: WheelEvent) {
+  const list = event.currentTarget as HTMLElement | null;
+  if (!list || list.scrollHeight <= list.clientHeight) return;
+  event.preventDefault();
+  event.stopPropagation();
+  list.scrollTop += event.deltaY;
+}
 watch(category, () => {
   categoryStartSequence.value = Math.max(0, ...props.events.map(event => event.sequence ?? 0));
 });
@@ -44,7 +52,7 @@ const visibleEvents = computed(() => {
         <el-option label="未分类" value="unknown" />
       </el-select>
     </div>
-    <div class="event-list">
+    <div class="event-list" @wheel="handleListWheel">
       <article v-for="event in visibleEvents" :key="`${event.stableKey}:${event.sequence}`" class="event-row">
         <div class="event-main">
           <div class="event-key">
@@ -82,6 +90,7 @@ const visibleEvents = computed(() => {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+  touch-action: pan-y;
   scrollbar-gutter: stable;
   border: 1px solid var(--vc-border);
   border-radius: 6px;
