@@ -11,13 +11,16 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #app { width: 100%; min-height: 100%; margin: 0; }
+html, body, #app { width: 100%; height: 100%; min-height: 0; margin: 0; }
 body { color: var(--vc-text); background: var(--vc-bg); }
 button, input, select, textarea { letter-spacing: 0; }
-.voice-controller-page { width: 100%; min-height: 100vh; background: var(--vc-bg); }
+.voice-controller-page { display: flex; width: 100%; height: 100vh; min-height: 0; flex-direction: column; overflow: hidden; background: var(--vc-bg); }
+.workspace-tabs { display: flex; min-height: 0; flex: 1; flex-direction: column; }
 .workspace-tabs > .el-tabs__header { margin: 0; padding: 0 20px; border-bottom: 1px solid var(--vc-border); }
 .workspace-tabs > .el-tabs__header .el-tabs__nav-wrap::after { display: none; }
-.workspace-tabs > .el-tabs__content { overflow: visible; }
+.workspace-tabs > .el-tabs__content { min-height: 0; flex: 1; overflow: hidden; }
+.workspace-tabs > .el-tabs__content > .el-tab-pane { height: 100%; overflow: auto; }
+.workspace-tabs > .el-tabs__content > .events-pane { overflow: hidden; }
 .el-button { border-radius: 5px; }
 .el-input__wrapper, .el-select__wrapper { border-radius: 5px; }
 code { font-family: "Cascadia Mono", "Consolas", monospace; }

@@ -25,7 +25,7 @@ const visibleEvents = computed(() => controller.events.value);
     />
 
     <el-tabs v-model="activeTab" class="workspace-tabs">
-      <el-tab-pane label="近期事件" name="events">
+      <el-tab-pane label="近期事件" name="events" class="events-pane">
         <EventBrowser
           :events="visibleEvents"
           :saved-keys="savedKeys"

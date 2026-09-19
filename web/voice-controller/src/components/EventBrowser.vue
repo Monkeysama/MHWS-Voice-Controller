@@ -69,7 +69,7 @@ const visibleEvents = computed(() => {
 </template>
 
 <style scoped>
-.event-browser { min-width: 0; padding: 18px 20px; }
+.event-browser { display: flex; min-width: 0; height: 100%; flex-direction: column; padding: 18px 20px; }
 .section-heading, .event-row, .event-actions, .event-key { display: flex; align-items: center; }
 .section-heading, .event-row { justify-content: space-between; }
 .section-heading { gap: 12px; margin-bottom: 14px; }
@@ -77,7 +77,8 @@ const visibleEvents = computed(() => {
 .eyebrow, .event-source, .event-meta { color: var(--vc-muted); font-size: 12px; }
 .toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 150px; gap: 8px; margin-bottom: 12px; }
 .event-list {
-  max-height: calc(100vh - 286px);
+  min-height: 0;
+  flex: 1;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
