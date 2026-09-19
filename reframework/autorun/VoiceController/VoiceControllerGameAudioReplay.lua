@@ -14,10 +14,8 @@ local function call(object, method, ...)
     return ok and result or nil
 end
 
--- 帧线程从容器的稳定触发定义中按双 ID 定位条目；RequestInfo 会被游戏复用，不能作为长期重放模板。
-local function resolve_trigger_info(descriptor)
-    local ok, list = pcall(function() return descriptor.container._TriggerInfoList end)
-    if not ok or list == nil then return nil end
+local function find_trigger_in_list(list, descriptor)
+    if list == nil then return nil end
     local items_ok, items = pcall(function() return list._items end)
     if items_ok and items ~= nil then
         for _, trigger in pairs(items) do
@@ -35,6 +33,44 @@ local function resolve_trigger_info(descriptor)
             and tostring(call(trigger, "get_EventId")) == descriptor.event_id
             and tostring(call(trigger, "get_TriggerId")) == descriptor.trigger_id then
             return trigger
+        end
+    end
+    return nil
+end
+
+local function find_trigger_in_array(array, descriptor)
+    if array == nil then return nil end
+    local items_ok, items = pcall(function() return array:get_elements() end)
+    if items_ok and items ~= nil then
+        for _, trigger in ipairs(items) do
+            if trigger ~= nil
+                and tostring(call(trigger, "get_EventId")) == descriptor.event_id
+                and tostring(call(trigger, "get_TriggerId")) == descriptor.trigger_id then
+                return trigger
+            end
+        end
+    end
+    return find_trigger_in_list(array, descriptor)
+end
+
+-- 帧线程从容器的稳定触发定义中按双 ID 定位条目；兼容 EMV 使用的全量触发数据列表。
+local function resolve_trigger_info(descriptor)
+    local direct_ok, direct_list = pcall(function() return descriptor.container._TriggerInfoList end)
+    local direct = direct_ok and find_trigger_in_list(direct_list, descriptor) or nil
+    if direct then return direct end
+
+    local all_ok, all_data = pcall(descriptor.container.call, descriptor.container, "get_AllTriggerInfoListData")
+    if not all_ok or all_data == nil then return nil end
+    local data_items_ok, data_items = pcall(function() return all_data._items end)
+    if not data_items_ok or data_items == nil then return nil end
+    for _, data in pairs(data_items) do
+        if data ~= nil then
+            local array_ok, trigger_array = pcall(data.call, data, "get_TriggerInfoList")
+            local trigger = array_ok and find_trigger_in_array(trigger_array, descriptor) or nil
+            if trigger then return trigger end
+            local list_ok, trigger_list = pcall(function() return data._TriggerInfoList end)
+            trigger = list_ok and find_trigger_in_list(trigger_list, descriptor) or nil
+            if trigger then return trigger end
         end
     end
     return nil

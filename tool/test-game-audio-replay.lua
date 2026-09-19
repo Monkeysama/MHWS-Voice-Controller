@@ -38,3 +38,25 @@ end})
 assert(Replay.can_resolve(resolved, "30:40", {category = "player"}))
 assert(Replay.enqueue(resolved, "30:40", {category = "player"}))
 assert(Replay.tick(resolved).kind == "submitted")
+
+local trigger = {call = function(_, method)
+    return ({get_EventId = 30, get_TriggerId = 40})[method]
+end}
+local trigger_data = {call = function(_, method)
+    if method == "get_TriggerInfoList" then return {get_elements = function() return {trigger} end} end
+end}
+local container = { _TriggerInfoList = {_items = {}}, call = function(_, method)
+    if method == "get_AllTriggerInfoListData" then return {_items = {trigger_data}} end
+    if method == "createRequestInfo(soundlib.SoundTriggerInfo, via.GameObject, via.GameObject, System.UInt32, System.Boolean, System.Boolean, System.UInt32, via.simplewwise.CallbackType, System.Action`1<soundlib.SoundManager.RequestInfo>, System.Action`1<soundlib.SoundManager.RequestInfo>, System.Action`1<soundlib.SoundManager.RequestInfo>, System.Action`1<soundlib.SoundManager.RequestInfo>)" then
+        return {add_ref = function() end, call = function() end}
+    end
+    if method == "trigger(soundlib.SoundManager.RequestInfo)" then return 1 end
+end}
+local direct = Replay.new()
+assert(Replay.enqueue(direct, "30:40", {category = "player"}) == false)
+assert(Replay.capture(direct, {call = function(_, method)
+    return ({get_EventId = 30, get_TriggerId = 40, get_Container = container,
+        get_SrcGameObj = "source", get_TargetGameObj = "target", get_OffsetJointHash = 0})[method]
+end}))
+assert(Replay.enqueue(direct, "30:40"))
+assert(Replay.tick(direct).kind == "submitted")
