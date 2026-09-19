@@ -76,7 +76,15 @@ const visibleEvents = computed(() => {
 .section-heading h2 { margin: 3px 0 0; font-size: 17px; letter-spacing: 0; }
 .eyebrow, .event-source, .event-meta { color: var(--vc-muted); font-size: 12px; }
 .toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 150px; gap: 8px; margin-bottom: 12px; }
-.event-list { overflow: hidden; border: 1px solid var(--vc-border); border-radius: 6px; }
+.event-list {
+  max-height: calc(100vh - 286px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid var(--vc-border);
+  border-radius: 6px;
+}
 .event-row { min-height: 74px; gap: 16px; padding: 10px 12px; border-bottom: 1px solid var(--vc-border); background: var(--vc-surface); }
 .event-row:last-child { border-bottom: 0; }
 .event-main { min-width: 0; }
