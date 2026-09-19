@@ -67,8 +67,23 @@ function Replay.new(options)
         submitted = 0,
         failed = 0,
         last_error = nil,
-        play_descriptor = options.play_descriptor or default_play
+        play_descriptor = options.play_descriptor or default_play,
+        resolve_descriptor = options.resolve_descriptor
     }
+end
+
+-- 为持久收藏提供当前场景解析入口；解析只在页面请求播放或查询可用性时执行。
+function Replay.resolve(replay, stable_key, metadata)
+    if Replay.has(replay, stable_key) then return replay.descriptors[stable_key] end
+    if type(replay.resolve_descriptor) ~= "function" then return nil end
+    local ok, descriptor = pcall(replay.resolve_descriptor, stable_key, metadata)
+    if not ok or type(descriptor) ~= "table" then return nil end
+    replay.descriptors[stable_key] = descriptor
+    return descriptor
+end
+
+function Replay.can_resolve(replay, stable_key, metadata)
+    return Replay.resolve(replay, stable_key, metadata) ~= nil
 end
 
 -- 从自然 RequestInfo 保存重放所需对象；Lua 引用由 REFramework 自动维持，队列容量限制其生命周期。
@@ -110,10 +125,12 @@ function Replay.has(replay, stable_key)
     return replay.descriptors[stable_key] ~= nil
 end
 
-function Replay.enqueue(replay, stable_key)
-    if not Replay.has(replay, stable_key) then return false, "replay_unavailable" end
+function Replay.enqueue(replay, stable_key, metadata)
+    if not Replay.has(replay, stable_key) and type(replay.resolve_descriptor) ~= "function" then
+        return false, "replay_unavailable"
+    end
     if #replay.pending >= MAX_PENDING then return false, "replay_queue_full" end
-    replay.pending[#replay.pending + 1] = stable_key
+    replay.pending[#replay.pending + 1] = {stable_key = stable_key, metadata = metadata}
     return true
 end
 
@@ -124,8 +141,10 @@ end
 -- 帧线程每帧最多重放一条；active 守卫覆盖同步触发链，防止试听污染自然捕获。
 function Replay.tick(replay)
     if #replay.pending == 0 then return nil end
-    local stable_key = table.remove(replay.pending, 1)
-    local descriptor = replay.descriptors[stable_key]
+    local request = table.remove(replay.pending, 1)
+    local stable_key = type(request) == "table" and request.stable_key or request
+    local metadata = type(request) == "table" and request.metadata or nil
+    local descriptor = Replay.resolve(replay, stable_key, metadata)
     if not descriptor then
         replay.failed = replay.failed + 1
         replay.last_error = "replay_unavailable"

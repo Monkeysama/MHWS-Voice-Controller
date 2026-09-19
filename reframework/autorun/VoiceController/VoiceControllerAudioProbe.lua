@@ -59,6 +59,8 @@ local end_event_hook_installed = false
 local voice_index = {}
 local voice_index_ready = false
 local next_index_attempt = 0
+local player_voice_container = nil
+local player_voice_object = nil
 local replacement_runtime = ReplacementRuntime.compile({})
 local replacement_config = nil
 local config_manager = nil
@@ -122,6 +124,26 @@ local catalog_signature = nil
 local catalog_snapshot = nil
 local blocked_source_prefixes = {"SoundLayerdRandomGenerator"}
 local runtime_messages = {}
+
+-- 从当前玩家声音容器重建持久收藏的重放描述；只用于明确的手动播放请求。
+local function resolve_persistent_player_descriptor(stable_key, metadata)
+    if type(metadata) ~= "table" or metadata.category ~= "player" then return nil end
+    if player_voice_container == nil or player_voice_object == nil then return nil end
+    if voice_index[stable_key] == nil then return nil end
+    local event_id, trigger_id = string.match(stable_key, "^(%d+):(%d+)$")
+    if not event_id or not trigger_id then return nil end
+    return {
+        event_id = event_id,
+        trigger_id = trigger_id,
+        container = player_voice_container,
+        source_object = player_voice_object,
+        target_object = player_voice_object,
+        offset_joint_hash = 0,
+        source_path = metadata.sourcePath
+    }
+end
+
+game_audio_replay.resolve_descriptor = resolve_persistent_player_descriptor
 
 -- 帧线程写入有界运行时消息队列；Hook 只入队，不执行文件 IO。
 local function queue_runtime_message(message)
@@ -541,6 +563,9 @@ local function try_build_voice_index()
             end
         end
         if not sound_container then return nil end
+
+        player_voice_container = sound_container
+        player_voice_object = game_object
 
         local list_data = sound_container:call("get_AllTriggerInfoListData")
         local items = list_data and list_data._items
@@ -1237,7 +1262,7 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
             browser_weapon_events, browser_unknown_events}
         for _, store in ipairs(stores) do
             for _, event in ipairs(EventStore.to_array(store)) do
-                event.replayable = GameAudioReplay.has(game_audio_replay, event.stableKey)
+                event.replayable = GameAudioReplay.can_resolve(game_audio_replay, event.stableKey, event)
                 result[#result + 1] = event
             end
         end
@@ -1247,7 +1272,7 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
     get_saved_events = function()
         local events = saved_event_store and SavedEventStore.snapshot(saved_event_store) or {}
         for _, event in ipairs(events) do
-            event.replayable = GameAudioReplay.has(game_audio_replay, event.stableKey)
+            event.replayable = GameAudioReplay.can_resolve(game_audio_replay, event.stableKey, event)
             event.durationMs = duration_by_key[event.stableKey] or event.durationMs
         end
         return events
@@ -1323,7 +1348,16 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
         return removed, {err}
     end,
     play_event = function(stable_key)
-        local queued, err = GameAudioReplay.enqueue(game_audio_replay, stable_key)
+        local event = nil
+        if saved_event_store then
+            event = SavedEventStore.snapshot(saved_event_store)
+            for _, item in ipairs(event) do
+                if item.stableKey == stable_key then event = item break end
+            end
+            if type(event) ~= "table" or event.stableKey ~= stable_key then event = nil end
+        end
+        event = event or find_recent_event_by_key(stable_key) or EventStore.find_latest(recent_events, stable_key)
+        local queued, err = GameAudioReplay.enqueue(game_audio_replay, stable_key, event)
         if queued then queue_runtime_message("GAME_AUDIO_PLAY_QUEUED\tkey=" .. tostring(stable_key)) end
         return queued, {err}
     end,

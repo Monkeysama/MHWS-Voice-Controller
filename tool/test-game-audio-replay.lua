@@ -26,3 +26,15 @@ local ok, err = Replay.enqueue(replay, "30:40")
 assert(not ok and err == "replay_unavailable")
 
 print("VoiceControllerGameAudioReplay tests passed")
+
+local resolved = Replay.new({resolve_descriptor = function(key, metadata)
+    if key == "30:40" and metadata.category == "player" then
+        return {container = "resolved-container", offset_joint_hash = 0}
+    end
+end, play_descriptor = function(descriptor)
+    assert(descriptor.container == "resolved-container")
+    return true
+end})
+assert(Replay.can_resolve(resolved, "30:40", {category = "player"}))
+assert(Replay.enqueue(resolved, "30:40", {category = "player"}))
+assert(Replay.tick(resolved).kind == "submitted")
