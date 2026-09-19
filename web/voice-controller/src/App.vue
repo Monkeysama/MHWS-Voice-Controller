@@ -34,7 +34,7 @@ const visibleEvents = computed(() => controller.events.value);
           @play="controller.playEvent"
         />
       </el-tab-pane>
-      <el-tab-pane label="保存列表" name="saved">
+      <el-tab-pane label="保存列表" name="saved" class="saved-pane">
         <SavedEventBrowser
           :events="controller.savedEvents.value"
           :busy="controller.busy.value"
@@ -42,7 +42,7 @@ const visibleEvents = computed(() => controller.events.value);
           @remove="controller.removeSavedEvent"
         />
       </el-tab-pane>
-      <el-tab-pane label="分组配置" name="rules">
+      <el-tab-pane label="分组配置" name="rules" class="rules-pane">
         <RuleEditor
           :groups="controller.groups.value"
           :catalog-files="controller.catalogFiles.value"

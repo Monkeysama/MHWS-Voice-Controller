@@ -15,13 +15,21 @@ const visibleEvents = computed(() => {
     .some(value => String(value ?? '').toLowerCase().includes(needle)));
 });
 function formatDuration(durationMs?: number) { return durationMs ? `${(durationMs / 1000).toFixed(2)} 秒` : '时长待获取'; }
+// 切换 REFF 标签页后固定由当前列表处理滚轮，避免滚动事件落到宿主页面。
+function handleListWheel(event: WheelEvent) {
+  const list = event.currentTarget as HTMLElement | null;
+  if (!list || list.scrollHeight <= list.clientHeight) return;
+  event.preventDefault();
+  event.stopPropagation();
+  list.scrollTop += event.deltaY;
+}
 </script>
 
 <template>
   <section class="saved-browser">
     <header class="section-heading"><div><span class="eyebrow">永久记录</span><h2>保存列表</h2></div><el-tag effect="plain">{{ events.length }} 条</el-tag></header>
     <el-input v-model="query" class="search" :prefix-icon="Search" clearable placeholder="搜索收藏的游戏内音频" />
-    <div class="saved-list">
+    <div class="saved-list" @wheel="handleListWheel">
       <article v-for="event in visibleEvents" :key="event.stableKey" class="saved-row">
         <div class="saved-main"><code>{{ event.stableKey }}</code><span>{{ event.sourcePath || event.sourceObject || '未知来源' }}</span><small>{{ formatDuration(event.durationMs) }} · 收藏于 {{ event.savedAt || '未知时间' }}</small></div>
         <div class="actions">
@@ -39,14 +47,14 @@ function formatDuration(durationMs?: number) { return durationMs ? `${(durationM
 </template>
 
 <style scoped>
-.saved-browser { padding: 18px 20px; }
+.saved-browser { display: flex; min-width: 0; height: 100%; flex-direction: column; padding: 18px 20px; }
 .section-heading, .saved-row, .actions { display: flex; align-items: center; }
 .section-heading, .saved-row { justify-content: space-between; gap: 14px; }
 .section-heading { margin-bottom: 12px; }
 .section-heading h2 { margin: 3px 0 0; font-size: 17px; letter-spacing: 0; }
 .eyebrow, .saved-main span, .saved-main small { color: var(--vc-muted); font-size: 12px; }
 .search { margin-bottom: 12px; }
-.saved-list { overflow: hidden; border: 1px solid var(--vc-border); border-radius: 6px; }
+.saved-list { min-height: 0; flex: 1; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; touch-action: pan-y; border: 1px solid var(--vc-border); border-radius: 6px; }
 .saved-row { min-height: 72px; padding: 10px 12px; border-bottom: 1px solid var(--vc-border); background: var(--vc-surface); }
 .saved-row:last-child { border-bottom: 0; }
 .saved-main { display: grid; min-width: 0; gap: 4px; }

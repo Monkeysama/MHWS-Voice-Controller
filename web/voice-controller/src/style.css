@@ -21,6 +21,8 @@ button, input, select, textarea { letter-spacing: 0; }
 .workspace-tabs > .el-tabs__content { min-height: 0; flex: 1; overflow: hidden; }
 .workspace-tabs > .el-tabs__content > .el-tab-pane { height: 100%; overflow: auto; }
 .workspace-tabs > .el-tabs__content > .events-pane { overflow: hidden; }
+.workspace-tabs > .el-tabs__content > .saved-pane,
+.workspace-tabs > .el-tabs__content > .rules-pane { overflow: hidden; }
 .el-button { border-radius: 5px; }
 .el-input__wrapper, .el-select__wrapper { border-radius: 5px; }
 code { font-family: "Cascadia Mono", "Consolas", monospace; }

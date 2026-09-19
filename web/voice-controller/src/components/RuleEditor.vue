@@ -82,10 +82,19 @@ function setGroupEnabled(groupId: string, value: string | number | boolean) {
 function setGroupName(groupId: string, value: string) {
   emit('updateGroup', {groupId, name: value});
 }
+
+// 分组配置内容较长时固定由面板自身滚动，避免切换标签页后宿主页面抢占滚轮。
+function handlePanelWheel(event: WheelEvent) {
+  const panel = event.currentTarget as HTMLElement | null;
+  if (!panel || panel.scrollHeight <= panel.clientHeight) return;
+  event.preventDefault();
+  event.stopPropagation();
+  panel.scrollTop += event.deltaY;
+}
 </script>
 
 <template>
-  <section class="rule-editor">
+  <section class="rule-editor" @wheel="handlePanelWheel">
     <header class="section-heading">
       <div><span class="eyebrow">自定义配置</span><h2>分组与替换规则</h2></div>
       <div class="new-group"><el-input v-model="newGroupName" maxlength="64" placeholder="新分组名称" @keyup.enter="addGroup" /><el-button :icon="Plus" :disabled="busy || !newGroupName.trim()" @click="addGroup">新增分组</el-button></div>
@@ -174,7 +183,7 @@ function setGroupName(groupId: string, value: string) {
 </template>
 
 <style scoped>
-.rule-editor { padding: 18px 20px; }
+.rule-editor { height: 100%; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; touch-action: pan-y; padding: 18px 20px; }
 .blocked-panel { position: absolute; top: 18px; right: 20px; width: 320px; padding: 12px; border: 1px solid var(--vc-border); border-radius: 6px; background: var(--vc-surface); }
 .blocked-add, .blocked-row { display: flex; align-items: center; gap: 8px; }
 .blocked-add { margin-bottom: 8px; }
