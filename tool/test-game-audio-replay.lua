@@ -60,3 +60,8 @@ assert(Replay.capture(direct, {call = function(_, method)
 end}))
 assert(Replay.enqueue(direct, "30:40"))
 assert(Replay.tick(direct).kind == "submitted")
+
+local described = Replay.describe_container(container, "source", "target", "30:40", {
+    category = "weapon", offsetJointHash = 9
+})
+assert(described ~= nil and described.offset_joint_hash == 9)

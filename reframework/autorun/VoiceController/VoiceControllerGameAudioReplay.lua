@@ -102,6 +102,24 @@ local function default_play(descriptor)
     }
 end
 
+-- 根据当前场景中的声音容器构造一次性重放描述；调用方负责保证容器仍属于已加载场景。
+function Replay.describe_container(container, source_object, target_object, stable_key, metadata)
+    if container == nil or type(stable_key) ~= "string" then return nil end
+    local event_id, trigger_id = string.match(stable_key, "^(%d+):(%d+)$")
+    if not event_id or not trigger_id then return nil end
+    local descriptor = {
+        event_id = event_id,
+        trigger_id = trigger_id,
+        container = container,
+        source_object = source_object,
+        target_object = target_object or source_object,
+        offset_joint_hash = type(metadata) == "table" and tonumber(metadata.offsetJointHash) or 0,
+        source_path = type(metadata) == "table" and metadata.sourcePath or nil
+    }
+    if resolve_trigger_info(descriptor) == nil then return nil end
+    return descriptor
+end
+
 function Replay.new(options)
     options = options or {}
     return {

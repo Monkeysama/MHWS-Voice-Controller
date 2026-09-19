@@ -61,6 +61,10 @@ local voice_index_ready = false
 local next_index_attempt = 0
 local player_voice_container = nil
 local player_voice_object = nil
+local next_container_scan = 0
+local scene_containers = {}
+local scene_container_keys = {}
+local scene_containers_ready = false
 local replacement_runtime = ReplacementRuntime.compile({})
 local replacement_config = nil
 local config_manager = nil
@@ -125,25 +129,102 @@ local catalog_snapshot = nil
 local blocked_source_prefixes = {"SoundLayerdRandomGenerator"}
 local runtime_messages = {}
 
--- 从当前玩家声音容器重建持久收藏的重放描述；只用于明确的手动播放请求。
-local function resolve_persistent_player_descriptor(stable_key, metadata)
-    if type(metadata) ~= "table" or (metadata.category ~= "player" and metadata.category ~= "voice") then return nil end
-    if player_voice_container == nil or player_voice_object == nil then return nil end
-    if voice_index[stable_key] == nil then return nil end
-    local event_id, trigger_id = string.match(stable_key, "^(%d+):(%d+)$")
-    if not event_id or not trigger_id then return nil end
-    return {
-        event_id = event_id,
-        trigger_id = trigger_id,
-        container = player_voice_container,
-        source_object = player_voice_object,
-        target_object = player_voice_object,
-        offset_joint_hash = 0,
-        source_path = metadata.sourcePath
+-- 登记当前场景中的声音容器；容器引用由重放模块持有，扫描只在帧线程低频执行。
+local function register_scene_container(container, source_object)
+    if container == nil then return end
+    local key = nil
+    local ok, address = pcall(container.get_address, container)
+    if ok and address then key = tostring(address) end
+    key = key or tostring(container)
+    if scene_container_keys[key] then return end
+    scene_container_keys[key] = true
+    scene_containers[#scene_containers + 1] = {
+        container = container,
+        source_object = source_object,
+        target_object = source_object
     }
 end
 
-game_audio_replay.resolve_descriptor = resolve_persistent_player_descriptor
+-- 从 GameObject 组件和 Transform 子树收集 SoundContainer；失败的对象分支直接跳过。
+local function scan_game_object(root, visited, depth)
+    if root == nil or depth > 32 then return end
+    local address_ok, address = pcall(root.get_address, root)
+    local key = address_ok and address and tostring(address) or tostring(root)
+    if visited[key] then return end
+    visited[key] = true
+    local components_ok, components = pcall(root.call, root, "get_Components")
+    if components_ok and components then
+        local elements_ok, elements = pcall(components.get_elements, components)
+        for _, component in ipairs(elements_ok and elements or {}) do
+            local type_ok, type_def = pcall(component.get_type_definition, component)
+            local name_ok, full_name = false, nil
+            if type_ok and type_def then name_ok, full_name = pcall(type_def.get_full_name, type_def) end
+            if name_ok and tostring(full_name) == "soundlib.SoundContainer" then
+                register_scene_container(component, root)
+            end
+        end
+    end
+    local transform_ok, transform = pcall(root.call, root, "get_Transform")
+    if not transform_ok or not transform then return end
+    local child_ok, child = pcall(transform.call, transform, "get_Child")
+    while child_ok and child ~= nil do
+        local object_ok, object = pcall(child.call, child, "get_GameObject")
+        if object_ok and object then scan_game_object(object, visited, depth + 1) end
+        local next_ok, next_transform = pcall(child.call, child, "get_Next")
+        child_ok, child = next_ok, next_transform
+    end
+end
+
+-- 以玩家对象为根扫描当前场景；后续自然事件会继续登记 NPC/怪物等临时对象的容器。
+local function scan_scene_containers(now)
+    if now < next_container_scan then return end
+    next_container_scan = now + 2.0
+    local ok, root = pcall(function()
+        local manager = sdk.get_managed_singleton("app.PlayerManager")
+        local player = manager and manager:call("getMasterPlayer")
+        return player and player:call("get_Object")
+    end)
+    if ok and root then scan_game_object(root, {}, 0) end
+    scene_containers_ready = #scene_containers > 0
+end
+
+-- 从当前场景容器重建持久收藏的重放描述；不依赖 EMV 手动触发，也不写入近期事件。
+local function resolve_persistent_descriptor(stable_key, metadata)
+    if type(metadata) ~= "table" then return nil end
+    -- 玩家索引优先，避免多个容器拥有相同键时选到非玩家语音。
+    if (metadata.category == "player" or metadata.category == "voice")
+        and player_voice_container and player_voice_object
+        and voice_index[stable_key] ~= nil
+    then
+        local descriptor = GameAudioReplay.describe_container(
+            player_voice_container, player_voice_object, player_voice_object, stable_key, metadata)
+        if descriptor then return descriptor end
+    end
+    local wanted_source = type(metadata.sourceObject) == "string"
+        and string.match(metadata.sourceObject, "^([^%[]+)") or nil
+    local function try_entry(entry)
+        if wanted_source and entry.source_object then
+            local ok, name = pcall(entry.source_object.call, entry.source_object, "get_Name")
+            if not ok or tostring(name) ~= tostring(wanted_source) then return nil end
+        end
+        return GameAudioReplay.describe_container(
+            entry.container, entry.source_object, entry.target_object, stable_key, metadata)
+    end
+    if wanted_source then
+        for _, entry in ipairs(scene_containers) do
+            local descriptor = try_entry(entry)
+            if descriptor then return descriptor end
+        end
+    end
+    for _, entry in ipairs(scene_containers) do
+        local descriptor = GameAudioReplay.describe_container(
+            entry.container, entry.source_object, entry.target_object, stable_key, metadata)
+        if descriptor then return descriptor end
+    end
+    return nil
+end
+
+game_audio_replay.resolve_descriptor = resolve_persistent_descriptor
 
 -- 帧线程写入有界运行时消息队列；Hook 只入队，不执行文件 IO。
 local function queue_runtime_message(message)
@@ -431,6 +512,11 @@ local function enqueue_request(request, origin)
         return fallback or "?"
     end
 
+    local function read_value(name)
+        local ok, value = pcall(request.call, request, name)
+        return ok and value or nil
+    end
+
     local function read_object(name)
         local ok, value = pcall(request.call, request, name)
         if not ok or value == nil then return "?" end
@@ -466,6 +552,7 @@ local function enqueue_request(request, origin)
     enable_duration_callback(request)
     next_sequence = next_sequence + 1
     local replayable = GameAudioReplay.capture(game_audio_replay, request)
+    register_scene_container(read_value("get_Container"), read_value("get_SrcGameObj"))
 
     local replacement = nil
     local replacement_queued = false
@@ -516,6 +603,7 @@ local function enqueue_request(request, origin)
             container = container,
             sourceObject = source_object,
             targetObject = target_object,
+            offsetJointHash = tonumber(read("get_OffsetJointHash", "0")) or 0,
             replayable = replayable == true,
             durationMs = duration_by_key[event_id .. ":" .. trigger_id],
             observedAtMs = math.floor(os.clock() * 1000)
@@ -1441,6 +1529,7 @@ re.on_frame(function()
         end
     end
     try_build_voice_index()
+    scan_scene_containers(now)
     local replay_result = GameAudioReplay.tick(game_audio_replay)
     if replay_result and replay_result.kind == "submitted" then
         if replay_result.request_id then
