@@ -20,11 +20,14 @@ local function normalize_event(event)
     local event_id = normalize_uint(event.eventId)
     local trigger_id = normalize_uint(event.triggerId)
     if not event_id or not trigger_id then return nil, "invalid_event" end
+    local category = tostring(event.category or "unknown")
+    -- 兼容早期版本使用的 voice 分类；当前 UI 和持久解析统一使用 player。
+    if category == "voice" then category = "player" end
     return {
         stableKey = event_id .. ":" .. trigger_id,
         eventId = event_id,
         triggerId = trigger_id,
-        category = tostring(event.category or "unknown"),
+        category = category,
         sourcePath = event.sourcePath,
         sourceObject = event.sourceObject,
         origin = event.origin,

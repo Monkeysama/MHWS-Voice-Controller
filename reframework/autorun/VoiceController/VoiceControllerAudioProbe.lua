@@ -127,7 +127,7 @@ local runtime_messages = {}
 
 -- 从当前玩家声音容器重建持久收藏的重放描述；只用于明确的手动播放请求。
 local function resolve_persistent_player_descriptor(stable_key, metadata)
-    if type(metadata) ~= "table" or metadata.category ~= "player" then return nil end
+    if type(metadata) ~= "table" or (metadata.category ~= "player" and metadata.category ~= "voice") then return nil end
     if player_voice_container == nil or player_voice_object == nil then return nil end
     if voice_index[stable_key] == nil then return nil end
     local event_id, trigger_id = string.match(stable_key, "^(%d+):(%d+)$")

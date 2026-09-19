@@ -24,9 +24,13 @@ local api = {
 }
 local store = assert(Store.load("VoiceController\\saved_events.json", api))
 assert(Store.add(store, {eventId = "1", triggerId = "2", sourcePath = "voice"}, "now"))
-assert(#Store.snapshot(store) == 1 and Store.contains(store, "1:2"))
-local ok, err = Store.add(store, {eventId = "1", triggerId = "2"})
+local first = Store.snapshot(store)[1]
+assert(#Store.snapshot(store) == 1 and Store.contains(store, "1:2") and first.category == "unknown")
+assert(Store.remove(store, "1:2"))
+assert(Store.add(store, {eventId = "3", triggerId = "4", category = "voice"}, "now"))
+assert(Store.snapshot(store)[1].category == "player")
+local ok, err = Store.add(store, {eventId = "3", triggerId = "4"})
 assert(not ok and err == "already_saved")
-assert(Store.remove(store, "1:2") and #Store.snapshot(store) == 0)
+assert(Store.remove(store, "3:4") and #Store.snapshot(store) == 0)
 
 print("VoiceControllerSavedEventStore tests passed")
