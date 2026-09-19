@@ -5,7 +5,7 @@ local Replay = {}
 
 local MAX_DESCRIPTORS = 512
 local MAX_PENDING = 16
-local CALLBACK_DURATION_AND_END = 9
+local CALLBACK_TYPE_NONE = 0
 local CREATE_REQUEST_SIGNATURE = "createRequestInfo(soundlib.SoundTriggerInfo, via.GameObject, via.GameObject, System.UInt32, System.Boolean, System.Boolean, System.UInt32, via.simplewwise.CallbackType, System.Action`1<soundlib.SoundManager.RequestInfo>, System.Action`1<soundlib.SoundManager.RequestInfo>, System.Action`1<soundlib.SoundManager.RequestInfo>, System.Action`1<soundlib.SoundManager.RequestInfo>)"
 
 local function call(object, method, ...)
@@ -79,13 +79,22 @@ end
 local function default_play(descriptor)
     local trigger = resolve_trigger_info(descriptor)
     if trigger == nil then return false, "trigger_info_not_found" end
+    local offset_joint_hash = descriptor.offset_joint_hash
+    if offset_joint_hash == nil or tonumber(offset_joint_hash) == 0 then
+        offset_joint_hash = call(trigger, "get_OffsetJointHash") or 0
+        local field_ok, field_value = pcall(function() return trigger._OffsetJointHash end)
+        if field_ok and field_value ~= nil then offset_joint_hash = field_value end
+    end
     local request = descriptor.container:call(
         CREATE_REQUEST_SIGNATURE,
         trigger, descriptor.source_object, descriptor.target_object,
-        descriptor.offset_joint_hash, false, false, 0, CALLBACK_DURATION_AND_END, nil, nil, nil, nil)
+        offset_joint_hash, false, false, 0, CALLBACK_TYPE_NONE, nil, nil, nil, nil)
     if request == nil then return false, "request_create_failed" end
     pcall(request.add_ref, request)
-    request:call("set_Container", descriptor.container)
+    local container_set = pcall(function()
+        request["<Container>k__BackingField"] = descriptor.container
+    end)
+    if not container_set then pcall(request.call, request, "set_Container", descriptor.container) end
     local request_id = descriptor.container:call("trigger(soundlib.SoundManager.RequestInfo)", request)
     return true, {
         request_id = request_id and tostring(request_id) or nil,
