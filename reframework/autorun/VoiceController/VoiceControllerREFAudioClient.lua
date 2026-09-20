@@ -129,6 +129,7 @@ function Client.new(file_api)
         backend_checked_at = -1,
         backend_ready = false,
         spatial_3d_ready = false,
+        spatial_batch_ready = false,
         group_dirs_ready = false,
         submitted = 0,
         failed = 0,
@@ -143,6 +144,9 @@ function Client.new(file_api)
         spatial_snapshot_at = -1,
         spatial_active_ids = {},
         pending_volume_channels = {},
+        pending_spatial_batch = false,
+        spatial_cursor = nil,
+        next_spatial_update = 0,
         read_spatial_state = file_api.read_spatial_state or read_spatial_state,
         read_all = file_api.read_all or read_all,
         file_exists = file_api.file_exists or file_exists,
@@ -221,6 +225,24 @@ function Client.enqueue_channel_position(client, channel_id, spatial, stable_key
     return true
 end
 
+-- 将多个 3D 声源与同一相机监听器合并为一条命令，避免多声道更新超过文件协议吞吐量。
+function Client.enqueue_spatial_batch(client, updates, listener)
+    if client.pending_spatial_batch or #updates == 0 then return false end
+    if #client.pending >= MAX_PENDING then
+        client.dropped = client.dropped + 1
+        client.last_error = "queue_full"
+        return false
+    end
+    client.pending[#client.pending + 1] = {
+        source = "spatial",
+        action = "spatial_batch",
+        updates = updates,
+        listener = listener
+    }
+    client.pending_spatial_batch = true
+    return true
+end
+
 -- 从 REFF/帧线程排队创建受限分组目录；实际文件系统操作由 REFAudio 工作线程完成。
 function Client.enqueue_ensure_group_directory(client, path)
     return Client.enqueue_load(client, {
@@ -242,6 +264,8 @@ check_backend = function(client, now)
         and string.find(marker, "group_dirs=1", 1, true) ~= nil
     client.spatial_3d_ready = client.backend_ready
         and string.find(marker, "spatial3d=1", 1, true) ~= nil
+    client.spatial_batch_ready = client.spatial_3d_ready
+        and string.find(marker, "spatial_batch=1", 1, true) ~= nil
     return client.backend_ready
 end
 
@@ -255,6 +279,7 @@ local function fail_front(client, reason)
     if spec and (spec.action == "volume" or spec.action == "position3d") then
         client.pending_volume_channels[spec.channel_id] = nil
     end
+    if spec and spec.action == "spatial_batch" then client.pending_spatial_batch = false end
     client.failed = client.failed + 1
     client.last_error = reason
     return {
@@ -321,6 +346,22 @@ function Client.tick(client, now)
             clean_field(spatial.front[1]), clean_field(spatial.front[2]), clean_field(spatial.front[3]),
             clean_field(spatial.top[1]), clean_field(spatial.top[2]), clean_field(spatial.top[3])
         }
+    elseif action == "spatial_batch" then
+        local listener = spec.listener
+        fields = {
+            client.session_id, tostring(client.command_id), action, "0",
+            clean_field(listener.listener[1]), clean_field(listener.listener[2]),
+            clean_field(listener.listener[3]), clean_field(listener.front[1]),
+            clean_field(listener.front[2]), clean_field(listener.front[3]),
+            clean_field(listener.top[1]), clean_field(listener.top[2]),
+            clean_field(listener.top[3])
+        }
+        for _, update in ipairs(spec.updates) do
+            fields[#fields + 1] = clean_field(update.channel_id)
+            fields[#fields + 1] = clean_field(update.spatial.source[1])
+            fields[#fields + 1] = clean_field(update.spatial.source[2])
+            fields[#fields + 1] = clean_field(update.spatial.source[3])
+        end
     else
         fields = {client.session_id, tostring(client.command_id), action, "0", clean_field(spec.file)}
     end
@@ -342,6 +383,7 @@ function Client.tick(client, now)
     if action == "volume" or action == "position3d" then
         client.pending_volume_channels[channel_id] = nil
     end
+    if action == "spatial_batch" then client.pending_spatial_batch = false end
     client.last_write = now
     client.submitted = client.submitted + 1
     if action == "load" and spec.distance_enabled == true then
@@ -364,6 +406,8 @@ function Client.update_spatial(client, now)
         client.spatial_snapshot_at = now
         return
     end
+    if now < client.next_spatial_update then return end
+    client.next_spatial_update = now + SPATIAL_UPDATE_INTERVAL
     if now - client.spatial_snapshot_at >= SPATIAL_UPDATE_INTERVAL then
         client.spatial_snapshot = client.read_all("REFAudio\\audio_channels.txt")
         client.spatial_snapshot_at = now
@@ -378,33 +422,58 @@ function Client.update_spatial(client, now)
     end
     local snapshot = client.spatial_snapshot
     local updates = 0
+    local spatial_ids = {}
     for channel_id, entry in pairs(client.spatial_channels) do
         -- 文件存在且为空代表原生端已没有任何活动通道，必须清理旧对象引用。
         if type(snapshot) == "string" and not client.spatial_active_ids[tostring(channel_id)] then
             client.spatial_channels[channel_id] = nil
             client.pending_volume_channels[channel_id] = nil
+        elseif entry.spec.spatial_3d then
+            spatial_ids[#spatial_ids + 1] = channel_id
         elseif now - entry.last_update >= SPATIAL_UPDATE_INTERVAL
             and #client.pending < MAX_PENDING
             and updates < MAX_SPATIAL_UPDATES_PER_TICK
         then
-            if entry.spec.spatial_3d then
-                local spatial = client.read_spatial_state(entry.spec)
-                if spatial and Client.enqueue_channel_position(
-                    client, channel_id, spatial, entry.spec.stable_key) then
+            local volume = apply_distance_attenuation(entry.spec)
+            if entry.last_volume == nil or math.abs(volume - entry.last_volume) >= 0.01 then
+                if Client.enqueue_channel_volume(client, channel_id, volume, entry.spec.stable_key) then
+                    entry.last_volume = volume
                     entry.last_update = now
                     updates = updates + 1
                 end
             else
-                local volume = apply_distance_attenuation(entry.spec)
-                if entry.last_volume == nil or math.abs(volume - entry.last_volume) >= 0.01 then
-                    if Client.enqueue_channel_volume(client, channel_id, volume, entry.spec.stable_key) then
-                        entry.last_volume = volume
-                        entry.last_update = now
-                        updates = updates + 1
-                    end
-                else
-                    entry.last_update = now
-                end
+                entry.last_update = now
+            end
+        end
+    end
+    if #spatial_ids == 0 or client.pending_spatial_batch then return end
+    table.sort(spatial_ids)
+    local start = 1
+    if client.spatial_cursor ~= nil then
+        for index, channel_id in ipairs(spatial_ids) do
+            if channel_id > client.spatial_cursor then start = index break end
+        end
+    end
+    local batch, listener = {}, nil
+    for offset = 0, math.min(#spatial_ids, MAX_SPATIAL_UPDATES_PER_TICK) - 1 do
+        local channel_id = spatial_ids[((start + offset - 1) % #spatial_ids) + 1]
+        local entry = client.spatial_channels[channel_id]
+        local spatial = entry and client.read_spatial_state(entry.spec) or nil
+        if spatial then
+            batch[#batch + 1] = {channel_id = channel_id, spatial = spatial, entry = entry}
+            listener = listener or spatial
+            client.spatial_cursor = channel_id
+        end
+    end
+    if client.spatial_batch_ready then
+        if listener and Client.enqueue_spatial_batch(client, batch, listener) then
+            for _, update in ipairs(batch) do update.entry.last_update = now end
+        end
+    else
+        for _, update in ipairs(batch) do
+            if Client.enqueue_channel_position(client, update.channel_id,
+                update.spatial, update.entry.spec.stable_key) then
+                update.entry.last_update = now
             end
         end
     end
@@ -415,6 +484,7 @@ function Client.get_status(client)
         backendReady = client.backend_ready,
         groupDirectoriesReady = client.group_dirs_ready,
         spatial3dReady = client.spatial_3d_ready,
+        spatialBatchReady = client.spatial_batch_ready,
         pending = #client.pending,
         submitted = client.submitted,
         failed = client.failed,

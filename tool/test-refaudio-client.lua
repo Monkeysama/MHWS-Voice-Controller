@@ -9,7 +9,7 @@ local channel_reads = 0
 local client = Client.new({
     read_all = function(path)
         if path == "REFAudio\\audio_backend.txt" then
-            return "REFAudio\t1\tmultichannel=1\tmax_channels=32\tspatial3d=1"
+            return "REFAudio\t1\tmultichannel=1\tmax_channels=32\tspatial3d=1\tspatial_batch=1"
         end
         if path == "REFAudio\\audio_channels.txt" then
             channel_reads = channel_reads + 1
@@ -106,8 +106,9 @@ result = Client.tick(client, 0.51)
 assert(result and result.kind == "submitted" and result.source == "spatial")
 fields = {}
 for field in string.gmatch(written .. "\t", "([^\t]*)\t") do fields[#fields + 1] = field end
-assert(fields[3] == "position3d" and fields[4] == "1447235586")
-assert(tonumber(fields[5]) == 32 and tonumber(fields[8]) == 0)
+assert(fields[3] == "spatial_batch" and fields[4] == "0")
+assert(tonumber(fields[5]) == 0 and tonumber(fields[14]) == 1447235586)
+assert(tonumber(fields[15]) == 32)
 
 assert(Client.enqueue_load(client, {
     stable_key = "missing",
@@ -122,6 +123,7 @@ assert(result.source == "replacement")
 local status = Client.get_status(client)
 assert(status.pending == 0 and status.submitted == 4 and status.failed == 1)
 assert(status.spatial3dReady == true)
+assert(status.spatialBatchReady == true)
 ready, preflight_error = Client.preflight(client, "VoiceController\\Audio\\missing.ogg", 1.1)
 assert(not ready and preflight_error == "audio_file_missing")
 
@@ -141,8 +143,40 @@ fields = {}
 for field in string.gmatch(written .. "\t", "([^\t]*)\t") do fields[#fields + 1] = field end
 assert(fields[3] == "ensure_dir" and fields[5] == "VoiceController\\Groups\\测试分组\\Audio")
 
-channel_snapshot = ""
+client.spatial_channels = {}
+local active_lines = {}
+for channel_id = 1, 6 do
+    client.spatial_channels[channel_id] = {
+        spec = {
+            spatial_3d = true,
+            source_object = positioned(channel_id, 0, 0),
+            listener_object = listener
+        },
+        last_update = 0
+    }
+    active_lines[#active_lines + 1] = tostring(channel_id) .. "\tplaying\t0\t1\t1\t0\t3d"
+end
+channel_snapshot = table.concat(active_lines, "\n")
 Client.update_spatial(client, 1.0)
+result = Client.tick(client, 1.0)
+assert(result and result.kind == "submitted" and result.source == "spatial")
+fields = {}
+for field in string.gmatch(written .. "\t", "([^\t]*)\t") do fields[#fields + 1] = field end
+assert(fields[3] == "spatial_batch")
+assert(tonumber(fields[14]) == 1 and tonumber(fields[18]) == 2)
+assert(tonumber(fields[22]) == 3 and tonumber(fields[26]) == 4)
+
+Client.update_spatial(client, 1.11)
+result = Client.tick(client, 1.11)
+assert(result and result.kind == "submitted" and result.source == "spatial")
+fields = {}
+for field in string.gmatch(written .. "\t", "([^\t]*)\t") do fields[#fields + 1] = field end
+assert(tonumber(fields[14]) == 5 and tonumber(fields[18]) == 6)
+assert(tonumber(fields[22]) == 1 and tonumber(fields[26]) == 2)
+
+channel_snapshot = ""
+Client.update_spatial(client, 1.3)
 assert(Client.get_status(client).spatialChannels == 0)
+assert(Client.get_status(client).submitted == 8)
 
 print("VoiceControllerREFAudioClient tests passed")

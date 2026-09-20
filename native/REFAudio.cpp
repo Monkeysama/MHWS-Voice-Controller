@@ -461,7 +461,7 @@ void run_audio_worker() {
     DeleteFileW(command_path.c_str());
     DeleteFileW(utf8_command_path.c_str());
     write_text(backend_path,
-        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1");
+        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1\tspatial_batch=1");
     write_utf8_audio_catalog(data_dir, catalog_path);
 
     BassApi bass;
@@ -576,6 +576,26 @@ void run_audio_worker() {
                                 write_status(status_path, "error", error);
                             }
                         }
+                    }
+                } else if (action == "spatial_batch") {
+                    BassVector listener{}, front{}, top{};
+                    bool changed = parse_vector(parts, 4, listener) &&
+                        parse_vector(parts, 7, front) && parse_vector(parts, 10, top);
+                    if (changed) {
+                        bass.set_listener_3d_position(&listener, nullptr, &front, &top);
+                        for (std::size_t index = 13; index + 3 < parts.size(); index += 4) {
+                            std::uint32_t spatial_channel_id = 0;
+                            BassVector source{};
+                            if (!parse_channel_id(parts[index], spatial_channel_id) ||
+                                !parse_vector(parts, index + 1, source)) continue;
+                            const auto spatial_channel = channels.find(spatial_channel_id);
+                            if (spatial_channel != channels.end() &&
+                                spatial_channel->second.spatial) {
+                                bass.set_3d_position(spatial_channel->second.stream,
+                                    &source, nullptr, nullptr);
+                            }
+                        }
+                        bass.apply_3d();
                     }
                 } else {
                     auto found = channels.find(channel_id);
