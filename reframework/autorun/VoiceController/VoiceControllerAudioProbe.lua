@@ -545,6 +545,8 @@ local function enqueue_request(request, origin)
     local trigger_id = read("get_TriggerId")
     local source_path = voice_index[event_id .. ":" .. trigger_id]
     local container = read_object("get_Container")
+    local source_game_object = read_value("get_SrcGameObj")
+    local target_game_object = read_value("get_TargetGameObj")
     local source_object = read_game_object("get_SrcGameObj")
     local target_object = read_game_object("get_TargetGameObj")
     if is_blocked_source(source_object) then return end
@@ -560,7 +562,13 @@ local function enqueue_request(request, origin)
     if origin == "SoundManager.postRequestInfo" then
         local dispatch = ReplacementRuntime.dispatch(
             replacement_runtime, event_id, trigger_id, os.clock() * 1000, math.random(),
-            function(spec) return REFAudioClient.enqueue_load(replacement_client, spec) end)
+            function(spec)
+                -- Hook 只转交对象引用；坐标读取和距离计算延迟到音频帧线程。
+                spec.source_object = source_game_object
+                spec.listener_object = player_voice_object or target_game_object
+                spec.distance_enabled = true
+                return REFAudioClient.enqueue_load(replacement_client, spec)
+            end)
         if dispatch.matched then
             replacement_matched = replacement_matched + 1
             replacement_queued = dispatch.queued == true

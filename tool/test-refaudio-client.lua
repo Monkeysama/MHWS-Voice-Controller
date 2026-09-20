@@ -43,6 +43,31 @@ assert(fields[3] == "load")
 assert(fields[5] == "VoiceController\\Audio\\test.wav")
 assert(fields[8] == "1.5")
 
+local function positioned(x, y, z)
+    return {call = function(_, method)
+        if method == "get_Transform" then
+            return {call = function(_, transform_method)
+                if transform_method == "get_Position" then return {x = x, y = y, z = z} end
+            end}
+        end
+    end}
+end
+assert(Client.enqueue_load(client, {
+    stable_key = "distance",
+    file = "VoiceController\\Audio\\test.wav",
+    volume = 0.8,
+    speed = 1,
+    max_duration_ms = 0,
+    source_object = positioned(16, 0, 0),
+    listener_object = positioned(0, 0, 0),
+    distance_enabled = true
+}))
+result = Client.tick(client, 0.2)
+assert(result and result.kind == "submitted")
+fields = {}
+for field in string.gmatch(written .. "\t", "([^\t]*)\t") do fields[#fields + 1] = field end
+assert(tonumber(fields[6]) < 0.1 and tonumber(fields[6]) > 0)
+
 assert(Client.enqueue_load(client, {
     stable_key = "missing",
     file = "VoiceController\\Audio\\missing.ogg",
@@ -50,17 +75,17 @@ assert(Client.enqueue_load(client, {
     speed = 1,
     max_duration_ms = 0
 }))
-result = Client.tick(client, 0.1)
+result = Client.tick(client, 0.3)
 assert(result and result.kind == "error" and result.reason == "audio_file_missing")
 assert(result.source == "replacement")
 local status = Client.get_status(client)
-assert(status.pending == 0 and status.submitted == 1 and status.failed == 1)
+assert(status.pending == 0 and status.submitted == 2 and status.failed == 1)
 ready, preflight_error = Client.preflight(client, "VoiceController\\Audio\\missing.ogg", 1.1)
 assert(not ready and preflight_error == "audio_file_missing")
 
 assert(Client.enqueue_ensure_group_directory(client,
     "VoiceController\\Groups\\combat\\Audio"))
-result = Client.tick(client, 0.2)
+result = Client.tick(client, 0.4)
 assert(result and result.kind == "submitted" and result.source == "group-directory")
 fields = {}
 for field in string.gmatch(written .. "\t", "([^\t]*)\t") do fields[#fields + 1] = field end
@@ -68,7 +93,7 @@ assert(fields[3] == "ensure_dir" and fields[5] == "VoiceController\\Groups\\comb
 
 assert(Client.enqueue_ensure_group_directory(client,
     "VoiceController\\Groups\\测试分组\\Audio"))
-result = Client.tick(client, 0.3)
+result = Client.tick(client, 0.5)
 assert(result and result.kind == "submitted" and result.source == "group-directory")
 fields = {}
 for field in string.gmatch(written .. "\t", "([^\t]*)\t") do fields[#fields + 1] = field end

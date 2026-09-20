@@ -7,6 +7,9 @@ local BACKEND_PATH = "REFAudio\\audio_backend.txt"
 local COMMAND_PATH = "REFAudio\\audio_command.txt"
 local MIN_COMMAND_INTERVAL = 0.05
 local MAX_PENDING = 64
+local DISTANCE_REFERENCE = 1.5
+local DISTANCE_MAX = 40.0
+local DISTANCE_ROLLOFF = 1.0
 local check_backend
 
 local function read_all(path)
@@ -36,6 +39,41 @@ end
 local function clean_field(value)
     local cleaned = tostring(value):gsub("[\t\r\n]", "")
     return cleaned
+end
+
+-- 读取游戏对象世界坐标；只在帧线程执行，坐标不可用时保持规则原始音量。
+local function read_position(object)
+    if object == nil then return nil end
+    local transform_ok, transform = pcall(object.call, object, "get_Transform")
+    if not transform_ok or transform == nil then return nil end
+    local position_ok, position = pcall(transform.call, transform, "get_Position")
+    if not position_ok or position == nil then return nil end
+    local x, y, z
+    pcall(function() x, y, z = position.x, position.y, position.z end)
+    if x == nil then pcall(function() x = position:get_x() end) end
+    if y == nil then pcall(function() y = position:get_y() end) end
+    if z == nil then pcall(function() z = position:get_z() end) end
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    if not x or not y or not z then return nil end
+    return x, y, z
+end
+
+-- 计算线性距离衰减；不改变规则音量上限，超出最大距离时静音。
+local function apply_distance_attenuation(spec)
+    local volume = tonumber(spec.volume) or 1.0
+    if spec.distance_enabled ~= true then return volume end
+    local sx, sy, sz = read_position(spec.source_object)
+    local lx, ly, lz = read_position(spec.listener_object)
+    if not sx or not lx then return volume end
+    local dx, dy, dz = sx - lx, sy - ly, sz - lz
+    local distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+    local reference = tonumber(spec.reference_distance) or DISTANCE_REFERENCE
+    local maximum = tonumber(spec.max_distance) or DISTANCE_MAX
+    local rolloff = tonumber(spec.rolloff) or DISTANCE_ROLLOFF
+    if distance >= maximum then return 0 end
+    if distance <= reference then return volume end
+    local attenuation = reference / (reference + rolloff * (distance - reference))
+    return volume * math.max(0, math.min(1, attenuation))
 end
 
 -- 创建单写者客户端；通道 ID 使用独立高位区间，避免与手工测试通道冲突。
@@ -156,7 +194,7 @@ function Client.tick(client, now)
         action,
         tostring(channel_id),
         clean_field(spec.file),
-        clean_field(spec.volume or 1),
+        clean_field(apply_distance_attenuation(spec)),
         clean_field(spec.speed or 1),
         clean_field((spec.max_duration_ms or 0) / 1000)
     }
