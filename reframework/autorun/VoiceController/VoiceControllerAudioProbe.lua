@@ -68,7 +68,7 @@ local scene_containers_ready = false
 local scene_scan_root_key = nil
 local scene_scan_retry_at = 0
 local saved_source_names = {npc = {}, otomo = {}, player = {}, weapon = {}}
-local saved_source_discovered = {npc = false, otomo = false}
+local saved_source_retry_at = {npc = 0, otomo = 0}
 local replacement_runtime = ReplacementRuntime.compile({})
 local replacement_config = nil
 local config_manager = nil
@@ -147,6 +147,7 @@ local function register_scene_container(container, source_object)
         source_object = source_object,
         target_object = source_object
     }
+    GameAudioReplay.invalidate_resolution(game_audio_replay)
 end
 
 -- 判断组件是否为声音容器；NPC 使用 SoundNpcContainer 子类，不能只比较精确类型名。
@@ -197,16 +198,16 @@ end
 
 -- 只按永久收藏中的来源对象名寻找 NPC/坐骑，避免重载后扫描整个场景对象树。
 local function discover_saved_source_containers(category)
-    if saved_source_discovered[category] then return end
+    local now = os.clock()
+    if now < (saved_source_retry_at[category] or 0) then return end
+    -- 列表存在不代表收藏来源已经生成；仅在解析未命中时低频重查目标来源。
+    saved_source_retry_at[category] = now + 5.0
     local wanted = saved_source_names[category]
-    local found = false
-    local ready = false
     local function consider(object, allow_name_mismatch)
         if object == nil then return end
         local ok, name = pcall(object.call, object, "get_Name")
         if allow_name_mismatch or (ok and wanted[tostring(name)]) then
             scan_game_object(object, {}, 0)
-            found = true
         end
     end
     if category == "npc" then
@@ -214,7 +215,6 @@ local function discover_saved_source_containers(category)
             local manager = sdk.get_managed_singleton("app.NpcManager")
             local list = manager and manager._NpcList
             local elements = list and list:get_elements()
-            ready = elements ~= nil
             for _, info in ipairs(elements or {}) do
                 if info then consider(info:call("get_Object")) end
             end
@@ -225,12 +225,10 @@ local function discover_saved_source_containers(category)
             local master = manager and manager:call("getMasterOtomoManagedControl")
             if master then
                 consider(master:call("get_OtomoFace"), true)
-                ready = true
             else
                 -- 主坐骑尚未生成时只检查少量候选，避免重载期间遍历整个 108 项控制数组。
                 local controls = manager and manager:call("get_OtomoManagedControlList")
                 local elements = controls and controls:get_elements()
-                ready = elements ~= nil
                 local checked = 0
                 for _, control in ipairs(elements or {}) do
                     if control and checked < 8 then
@@ -244,8 +242,6 @@ local function discover_saved_source_containers(category)
             end
         end)
     end
-    saved_source_discovered[category] = ready
-    if found then GameAudioReplay.invalidate_resolution(game_audio_replay) end
 end
 
 -- 以玩家对象为根扫描当前场景；后续自然事件会继续登记 NPC/怪物等临时对象的容器。
@@ -300,6 +296,8 @@ local function resolve_persistent_descriptor(stable_key, metadata)
             local descriptor = try_entry(entry)
             if descriptor then return descriptor end
         end
+        -- 收藏带有来源对象时必须严格匹配；跨对象复用相同双 ID 可能触发成功但没有声音。
+        return nil
     end
     for _, entry in ipairs(scene_containers) do
         local descriptor = GameAudioReplay.describe_container(
@@ -1474,7 +1472,10 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
             browser_weapon_events, browser_unknown_events}
         for _, store in ipairs(stores) do
             for _, event in ipairs(EventStore.to_array(store)) do
-                event.replayable = GameAudioReplay.can_resolve(game_audio_replay, event.stableKey, event)
+                event.replayable = GameAudioReplay.is_available(game_audio_replay, event.stableKey)
+                local playback = GameAudioReplay.get_playback_state(game_audio_replay, event.stableKey)
+                event.playbackStatus = playback and playback.status or nil
+                event.playbackError = playback and playback.error or nil
                 result[#result + 1] = event
             end
         end
@@ -1484,7 +1485,10 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
     get_saved_events = function()
         local events = saved_event_store and SavedEventStore.snapshot(saved_event_store) or {}
         for _, event in ipairs(events) do
-            event.replayable = GameAudioReplay.can_resolve(game_audio_replay, event.stableKey, event)
+            event.replayable = GameAudioReplay.is_available(game_audio_replay, event.stableKey)
+            local playback = GameAudioReplay.get_playback_state(game_audio_replay, event.stableKey)
+            event.playbackStatus = playback and playback.status or nil
+            event.playbackError = playback and playback.error or nil
             event.durationMs = duration_by_key[event.stableKey] or event.durationMs
         end
         return events
@@ -1667,7 +1671,10 @@ re.on_frame(function()
         if replay_result.playing_id and replay_result.playing_id ~= "0" then
             playing_stable_keys[tostring(replay_result.playing_id)] = replay_result.stable_key
         end
-        queue_runtime_message("GAME_AUDIO_PLAY_SUBMITTED\tkey=" .. tostring(replay_result.stable_key))
+        queue_runtime_message(string.format(
+            "GAME_AUDIO_PLAY_SUBMITTED\tkey=%s\tRequestId=%s\tPlayingId=%s\tPlaying=%s",
+            tostring(replay_result.stable_key), tostring(replay_result.request_id or "?"),
+            tostring(replay_result.playing_id or "?"), tostring(replay_result.playing or "?")))
     elseif replay_result and replay_result.kind == "error" then
         queue_runtime_message("GAME_AUDIO_PLAY_FAILED\tkey=" .. tostring(replay_result.stable_key)
             .. "\treason=" .. tostring(replay_result.reason))

@@ -47,6 +47,8 @@ export interface ReplacementConfig {
   blockedSourcePrefixes?: string[];
 }
 
+export type PlaybackStatus = 'trying' | 'success' | 'failed';
+
 export interface AudioEvent {
   sequence: number;
   capturedAt?: string;
@@ -61,6 +63,8 @@ export interface AudioEvent {
   firstCapturedAt?: string;
   lastCapturedAt?: string;
   replayable?: boolean;
+  playbackStatus?: PlaybackStatus;
+  playbackError?: string;
   durationMs?: number;
   savedAt?: string;
 }

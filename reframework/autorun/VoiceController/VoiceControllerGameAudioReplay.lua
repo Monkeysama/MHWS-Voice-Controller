@@ -5,6 +5,9 @@ local Replay = {}
 
 local MAX_DESCRIPTORS = 512
 local MAX_PENDING = 16
+local RESOLUTION_RETRY_INTERVAL = 5
+local RESOLUTION_GLOBAL_INTERVAL = 0.25
+local PLAY_RESOLUTION_TIMEOUT = 5
 local CALLBACK_TYPE_NONE = 0
 local CREATE_REQUEST_SIGNATURE = "createRequestInfo(soundlib.SoundTriggerInfo, via.GameObject, via.GameObject, System.UInt32, System.Boolean, System.Boolean, System.UInt32, via.simplewwise.CallbackType, System.Action`1<soundlib.SoundManager.RequestInfo>, System.Action`1<soundlib.SoundManager.RequestInfo>, System.Action`1<soundlib.SoundManager.RequestInfo>, System.Action`1<soundlib.SoundManager.RequestInfo>)"
 
@@ -98,7 +101,8 @@ local function default_play(descriptor)
     local request_id = descriptor.container:call("trigger(soundlib.SoundManager.RequestInfo)", request)
     return true, {
         request_id = request_id and tostring(request_id) or nil,
-        playing_id = tostring(call(request, "get_PlayingId") or "0")
+        playing_id = tostring(call(request, "get_PlayingId") or "0"),
+        playing = tostring(call(request, "get_Playing") or false)
     }
 end
 
@@ -127,10 +131,16 @@ function Replay.new(options)
         unresolved = {},
         descriptor_order = {},
         pending = {},
+        playback_states = {},
         active = false,
         submitted = 0,
         failed = 0,
         last_error = nil,
+        clock = options.clock or os.clock,
+        resolution_retry_seconds = options.resolution_retry_seconds or RESOLUTION_RETRY_INTERVAL,
+        resolution_global_interval = options.resolution_global_interval or RESOLUTION_GLOBAL_INTERVAL,
+        play_resolution_timeout = options.play_resolution_timeout or PLAY_RESOLUTION_TIMEOUT,
+        next_resolution_retry = 0,
         play_descriptor = options.play_descriptor or default_play,
         resolve_descriptor = options.resolve_descriptor
     }
@@ -139,11 +149,17 @@ end
 -- 为持久收藏提供当前场景解析入口；解析只在页面请求播放或查询可用性时执行。
 function Replay.resolve(replay, stable_key, metadata)
     if Replay.has(replay, stable_key) then return replay.descriptors[stable_key] end
-    if replay.unresolved[stable_key] then return nil end
+    local now = replay.clock()
+    local retry_at = replay.unresolved[stable_key]
+    -- 失败只短期缓存；对象和触发定义可能晚于 Script Reset 加载。
+    -- 多个失败键到期时错开重试，避免页面刷新集中重复扫描所有容器。
+    if retry_at and now < retry_at then return nil end
+    if now < replay.next_resolution_retry then return nil end
+    replay.next_resolution_retry = now + replay.resolution_global_interval
     if type(replay.resolve_descriptor) ~= "function" then return nil end
     local ok, descriptor = pcall(replay.resolve_descriptor, stable_key, metadata)
     if not ok or type(descriptor) ~= "table" then
-        replay.unresolved[stable_key] = true
+        replay.unresolved[stable_key] = now + replay.resolution_retry_seconds
         return nil
     end
     replay.descriptors[stable_key] = descriptor
@@ -154,10 +170,16 @@ end
 -- 场景容器发生变化后允许之前失败的稳定键重新解析；成功描述无需重复扫描。
 function Replay.invalidate_resolution(replay)
     replay.unresolved = {}
+    replay.next_resolution_retry = 0
 end
 
 function Replay.can_resolve(replay, stable_key, metadata)
     return Replay.resolve(replay, stable_key, metadata) ~= nil
+end
+
+-- 页面状态只能读取已缓存描述符，不能在 REFF 轮询期间遍历游戏对象。
+function Replay.is_available(replay, stable_key)
+    return Replay.has(replay, stable_key)
 end
 
 -- 从自然 RequestInfo 保存重放所需对象；Lua 引用由 REFramework 自动维持，队列容量限制其生命周期。
@@ -202,10 +224,26 @@ end
 
 function Replay.enqueue(replay, stable_key, metadata)
     if not Replay.has(replay, stable_key) and type(replay.resolve_descriptor) ~= "function" then
+        replay.playback_states[stable_key] = {status = "failed", error = "replay_unavailable"}
         return false, "replay_unavailable"
     end
-    if #replay.pending >= MAX_PENDING then return false, "replay_queue_full" end
-    replay.pending[#replay.pending + 1] = {stable_key = stable_key, metadata = metadata}
+    if #replay.pending >= MAX_PENDING then
+        replay.playback_states[stable_key] = {status = "failed", error = "replay_queue_full"}
+        return false, "replay_queue_full"
+    end
+    for _, request in ipairs(replay.pending) do
+        if type(request) == "table" and request.stable_key == stable_key then
+            replay.playback_states[stable_key] = {status = "trying"}
+            return true
+        end
+    end
+    local now = replay.clock()
+    replay.pending[#replay.pending + 1] = {
+        stable_key = stable_key,
+        metadata = metadata,
+        expires_at = now + replay.play_resolution_timeout
+    }
+    replay.playback_states[stable_key] = {status = "trying"}
     return true
 end
 
@@ -216,32 +254,57 @@ end
 -- 帧线程每帧最多重放一条；active 守卫覆盖同步触发链，防止试听污染自然捕获。
 function Replay.tick(replay)
     if #replay.pending == 0 then return nil end
-    local request = table.remove(replay.pending, 1)
+    local request = replay.pending[1]
     local stable_key = type(request) == "table" and request.stable_key or request
     local metadata = type(request) == "table" and request.metadata or nil
     local descriptor = Replay.resolve(replay, stable_key, metadata)
     if not descriptor then
+        local now = replay.clock()
+        if type(request) == "table" and now < request.expires_at then
+            -- 未加载的来源留在队列中；全局节流保证每帧不会集中遍历多个收藏项。
+            table.remove(replay.pending, 1)
+            replay.pending[#replay.pending + 1] = request
+            return {kind = "waiting", stable_key = stable_key}
+        end
+        table.remove(replay.pending, 1)
         replay.failed = replay.failed + 1
         replay.last_error = "replay_unavailable"
+        replay.playback_states[stable_key] = {status = "failed", error = replay.last_error}
         return {kind = "error", stable_key = stable_key, reason = replay.last_error}
     end
+    table.remove(replay.pending, 1)
     replay.active = true
     local ok, played, detail = pcall(replay.play_descriptor, descriptor)
     replay.active = false
     if not ok or played ~= true then
         replay.failed = replay.failed + 1
         replay.last_error = ok and (detail or "replay_failed") or tostring(played)
+        replay.playback_states[stable_key] = {status = "failed", error = replay.last_error}
         return {kind = "error", stable_key = stable_key, reason = replay.last_error}
     end
     replay.submitted = replay.submitted + 1
     replay.last_error = nil
+    replay.playback_states[stable_key] = {status = "success"}
     return {kind = "submitted", stable_key = stable_key,
         request_id = type(detail) == "table" and detail.request_id or nil,
-        playing_id = type(detail) == "table" and detail.playing_id or nil}
+        playing_id = type(detail) == "table" and detail.playing_id or nil,
+        playing = type(detail) == "table" and detail.playing or nil}
+end
+
+-- 向 REFF 快照提供稳定键的最近一次播放结果；返回副本避免页面层修改运行时状态。
+function Replay.get_playback_state(replay, stable_key)
+    local state = replay.playback_states[stable_key]
+    if type(state) ~= "table" then return nil end
+    return {status = state.status, error = state.error}
 end
 
 function Replay.get_status(replay)
+    local unresolved_keys = {}
+    for key in pairs(replay.unresolved) do unresolved_keys[#unresolved_keys + 1] = key end
+    table.sort(unresolved_keys)
     return {
+        unresolvedCount = #unresolved_keys,
+        unresolvedKeys = #unresolved_keys > 0 and unresolved_keys or nil,
         available = (function()
             local count = 0
             for _ in pairs(replay.descriptors) do count = count + 1 end

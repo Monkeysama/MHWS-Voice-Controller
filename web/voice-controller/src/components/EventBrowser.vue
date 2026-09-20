@@ -2,6 +2,7 @@
 import {computed, shallowRef, watch} from 'vue';
 import {CollectionTag, Search, VideoPlay} from '@element-plus/icons-vue';
 import type {AudioEvent} from '@/types';
+import PlaybackStatus from '@/components/PlaybackStatus.vue';
 
 const props = defineProps<{events: AudioEvent[]; savedKeys: Set<string>; busy: boolean}>();
 const emit = defineEmits<{
@@ -74,8 +75,9 @@ const visibleEvents = computed(() => {
           <div class="event-meta">最近 #{{ event.sequence }} · {{ event.origin || 'unknown' }} · {{ formatDuration(event.durationMs) }}</div>
         </div>
         <div class="event-actions">
+          <PlaybackStatus :status="event.playbackStatus" :error="event.playbackError" />
           <el-tooltip :content="event.replayable ? '播放游戏内音频' : '当前会话无法解析此音频'">
-            <el-button class="play-button" :icon="VideoPlay" :disabled="busy || !event.replayable" aria-label="播放游戏内音频" @click="emit('play', {stableKey: event.stableKey})" />
+            <el-button class="play-button" :icon="VideoPlay" :disabled="busy || !event.replayable || event.playbackStatus === 'trying'" aria-label="播放游戏内音频" @click="emit('play', {stableKey: event.stableKey})" />
           </el-tooltip>
           <el-tag v-if="savedKeys.has(event.stableKey)" class="saved-tag" effect="plain">已收藏</el-tag>
           <el-button v-else :icon="CollectionTag" :disabled="busy" @click="emit('save', {stableKey: event.stableKey})">收藏</el-button>

@@ -2,6 +2,7 @@
 import {computed, shallowRef} from 'vue';
 import {Delete, Search, VideoPlay} from '@element-plus/icons-vue';
 import type {AudioEvent} from '@/types';
+import PlaybackStatus from '@/components/PlaybackStatus.vue';
 
 const props = defineProps<{events: AudioEvent[]; busy: boolean}>();
 const emit = defineEmits<{
@@ -33,8 +34,9 @@ function handleListWheel(event: WheelEvent) {
       <article v-for="event in visibleEvents" :key="event.stableKey" class="saved-row">
         <div class="saved-main"><code>{{ event.stableKey }}</code><span>{{ event.sourcePath || event.sourceObject || '未知来源' }}</span><small>{{ formatDuration(event.durationMs) }} · 收藏于 {{ event.savedAt || '未知时间' }}</small></div>
         <div class="actions">
-          <el-tooltip :content="event.replayable ? '播放游戏内音频' : '当前场景未解析到该音频，请先在游戏中自然触发一次'">
-            <el-button class="play-button" :icon="VideoPlay" :disabled="busy || !event.replayable" aria-label="播放游戏内音频" @click="emit('play', {stableKey: event.stableKey})" />
+          <PlaybackStatus :status="event.playbackStatus" :error="event.playbackError" />
+          <el-tooltip :content="event.replayable ? '播放游戏内音频' : '播放时尝试从当前场景解析音频'">
+            <el-button class="play-button" :icon="VideoPlay" :disabled="busy || event.playbackStatus === 'trying'" aria-label="播放游戏内音频" @click="emit('play', {stableKey: event.stableKey})" />
           </el-tooltip>
           <el-tooltip content="删除收藏；被规则引用时会拒绝删除">
             <el-button :icon="Delete" circle text type="danger" :disabled="busy" aria-label="删除收藏" @click="emit('remove', {stableKey: event.stableKey})" />

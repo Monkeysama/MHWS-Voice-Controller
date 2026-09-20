@@ -8,6 +8,7 @@
   --vc-accent: var(--reff-accent, #67d3b2);
   --vc-accent-strong: var(--reff-accent-strong, #82e2c5);
   --vc-accent-soft: color-mix(in srgb, var(--reff-accent, #67d3b2) 14%, var(--reff-card, #1a2431));
+  --vc-danger: var(--reff-danger, #e36d76);
 }
 
 * { box-sizing: border-box; }
