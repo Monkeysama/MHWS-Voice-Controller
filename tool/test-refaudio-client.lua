@@ -9,7 +9,7 @@ local channel_reads = 0
 local client = Client.new({
     read_all = function(path)
         if path == "REFAudio\\audio_backend.txt" then
-            return "REFAudio\t1\tmultichannel=1\tmax_channels=32"
+            return "REFAudio\t1\tmultichannel=1\tmax_channels=32\tspatial3d=1"
         end
         if path == "REFAudio\\audio_channels.txt" then
             channel_reads = channel_reads + 1
@@ -75,7 +75,9 @@ result = Client.tick(client, 0.2)
 assert(result and result.kind == "submitted")
 fields = {}
 for field in string.gmatch(written .. "\t", "([^\t]*)\t") do fields[#fields + 1] = field end
-assert(tonumber(fields[6]) < 0.1 and tonumber(fields[6]) > 0)
+assert(#fields == 22 and fields[3] == "load3d")
+assert(tonumber(fields[6]) == 0.8)
+assert(tonumber(fields[9]) == 16 and tonumber(fields[14]) == 0)
 
 local moving = {x = 16, y = 0, z = 0}
 local moving_source = {call = function(_, method)
@@ -104,7 +106,8 @@ result = Client.tick(client, 0.51)
 assert(result and result.kind == "submitted" and result.source == "spatial")
 fields = {}
 for field in string.gmatch(written .. "\t", "([^\t]*)\t") do fields[#fields + 1] = field end
-assert(fields[3] == "volume" and fields[4] == "1447235586" and tonumber(fields[5]) < 0.1)
+assert(fields[3] == "position3d" and fields[4] == "1447235586")
+assert(tonumber(fields[5]) == 32 and tonumber(fields[8]) == 0)
 
 assert(Client.enqueue_load(client, {
     stable_key = "missing",
@@ -118,6 +121,7 @@ assert(result and result.kind == "error" and result.reason == "audio_file_missin
 assert(result.source == "replacement")
 local status = Client.get_status(client)
 assert(status.pending == 0 and status.submitted == 4 and status.failed == 1)
+assert(status.spatial3dReady == true)
 ready, preflight_error = Client.preflight(client, "VoiceController\\Audio\\missing.ogg", 1.1)
 assert(not ready and preflight_error == "audio_file_missing")
 

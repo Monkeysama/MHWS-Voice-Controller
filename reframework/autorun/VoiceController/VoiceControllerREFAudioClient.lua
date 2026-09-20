@@ -60,6 +60,45 @@ local function read_position(object)
     return x, y, z
 end
 
+local function read_vector(value)
+    if value == nil then return nil end
+    local x, y, z
+    pcall(function() x, y, z = value.x, value.y, value.z end)
+    if x == nil then pcall(function() x = value:get_x() end) end
+    if y == nil then pcall(function() y = value:get_y() end) end
+    if z == nil then pcall(function() z = value:get_z() end) end
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    if not x or not y or not z then return nil end
+    return {x, y, z}
+end
+
+-- 帧线程读取声源与主相机姿态；BASS 监听器跟随相机，坐标不可用时回退玩家位置和固定朝向。
+local function read_spatial_state(spec)
+    local sx, sy, sz = read_position(spec.source_object)
+    if not sx then return nil end
+    local listener, front, top
+    if sdk and sdk.get_primary_camera then
+        pcall(function()
+            local camera = sdk.get_primary_camera()
+            local matrix = camera and camera:call("get_WorldMatrix")
+            listener = matrix and read_vector(matrix[3]) or nil
+            front = matrix and read_vector(matrix[2]) or nil
+            top = matrix and read_vector(matrix[1]) or nil
+        end)
+    end
+    if not listener then
+        local lx, ly, lz = read_position(spec.listener_object)
+        if lx then listener = {lx, ly, lz} end
+    end
+    if not listener then return nil end
+    return {
+        source = {sx, sy, sz},
+        listener = listener,
+        front = front or {0, 0, 1},
+        top = top or {0, 1, 0}
+    }
+end
+
 -- 计算线性距离衰减；不改变规则音量上限，超出最大距离时静音。
 local function apply_distance_attenuation(spec)
     local volume = tonumber(spec.volume) or 1.0
@@ -89,6 +128,7 @@ function Client.new(file_api)
         last_write = -MIN_COMMAND_INTERVAL,
         backend_checked_at = -1,
         backend_ready = false,
+        spatial_3d_ready = false,
         group_dirs_ready = false,
         submitted = 0,
         failed = 0,
@@ -103,6 +143,7 @@ function Client.new(file_api)
         spatial_snapshot_at = -1,
         spatial_active_ids = {},
         pending_volume_channels = {},
+        read_spatial_state = file_api.read_spatial_state or read_spatial_state,
         read_all = file_api.read_all or read_all,
         file_exists = file_api.file_exists or file_exists,
         write_all = file_api.write_all or write_all
@@ -161,6 +202,25 @@ function Client.enqueue_channel_volume(client, channel_id, volume, stable_key)
     return true
 end
 
+-- 向原生端追加空间坐标更新；同一通道只允许一条待处理命令，避免移动时淹没队列。
+function Client.enqueue_channel_position(client, channel_id, spatial, stable_key)
+    if client.pending_volume_channels[channel_id] then return true end
+    if #client.pending >= MAX_PENDING then
+        client.dropped = client.dropped + 1
+        client.last_error = "queue_full"
+        return false
+    end
+    client.pending[#client.pending + 1] = {
+        source = "spatial",
+        action = "position3d",
+        channel_id = channel_id,
+        spatial = spatial,
+        stable_key = stable_key
+    }
+    client.pending_volume_channels[channel_id] = true
+    return true
+end
+
 -- 从 REFF/帧线程排队创建受限分组目录；实际文件系统操作由 REFAudio 工作线程完成。
 function Client.enqueue_ensure_group_directory(client, path)
     return Client.enqueue_load(client, {
@@ -180,6 +240,8 @@ check_backend = function(client, now)
         and string.find(marker, "multichannel=1", 1, true) ~= nil
     client.group_dirs_ready = client.backend_ready
         and string.find(marker, "group_dirs=1", 1, true) ~= nil
+    client.spatial_3d_ready = client.backend_ready
+        and string.find(marker, "spatial3d=1", 1, true) ~= nil
     return client.backend_ready
 end
 
@@ -190,7 +252,7 @@ end
 local function fail_front(client, reason)
     local spec = client.pending[1]
     table.remove(client.pending, 1)
-    if spec and spec.action == "volume" then
+    if spec and (spec.action == "volume" or spec.action == "position3d") then
         client.pending_volume_channels[spec.channel_id] = nil
     end
     client.failed = client.failed + 1
@@ -222,15 +284,42 @@ function Client.tick(client, now)
     client.command_id = client.command_id + 1
     local fields
     if action == "load" then
-        fields = {
-            client.session_id, tostring(client.command_id), action, tostring(channel_id),
-            clean_field(spec.file), clean_field(apply_distance_attenuation(spec)),
-            clean_field(spec.speed or 1), clean_field((spec.max_duration_ms or 0) / 1000)
-        }
+        local spatial = spec.distance_enabled == true and client.spatial_3d_ready
+            and client.read_spatial_state(spec) or nil
+        if spatial then
+            fields = {
+                client.session_id, tostring(client.command_id), "load3d", tostring(channel_id),
+                clean_field(spec.file), clean_field(spec.volume or 1), clean_field(spec.speed or 1),
+                clean_field((spec.max_duration_ms or 0) / 1000),
+                clean_field(spatial.source[1]), clean_field(spatial.source[2]), clean_field(spatial.source[3]),
+                clean_field(spec.reference_distance or DISTANCE_REFERENCE),
+                clean_field(spec.max_distance or DISTANCE_MAX),
+                clean_field(spatial.listener[1]), clean_field(spatial.listener[2]), clean_field(spatial.listener[3]),
+                clean_field(spatial.front[1]), clean_field(spatial.front[2]), clean_field(spatial.front[3]),
+                clean_field(spatial.top[1]), clean_field(spatial.top[2]), clean_field(spatial.top[3])
+            }
+            spec.spatial_3d = true
+        else
+            fields = {
+                client.session_id, tostring(client.command_id), action, tostring(channel_id),
+                clean_field(spec.file), clean_field(apply_distance_attenuation(spec)),
+                clean_field(spec.speed or 1), clean_field((spec.max_duration_ms or 0) / 1000)
+            }
+            spec.spatial_3d = false
+        end
     elseif action == "volume" then
         fields = {
             client.session_id, tostring(client.command_id), action, tostring(channel_id),
             clean_field(spec.volume or 1)
+        }
+    elseif action == "position3d" then
+        local spatial = spec.spatial
+        fields = {
+            client.session_id, tostring(client.command_id), action, tostring(channel_id),
+            clean_field(spatial.source[1]), clean_field(spatial.source[2]), clean_field(spatial.source[3]),
+            clean_field(spatial.listener[1]), clean_field(spatial.listener[2]), clean_field(spatial.listener[3]),
+            clean_field(spatial.front[1]), clean_field(spatial.front[2]), clean_field(spatial.front[3]),
+            clean_field(spatial.top[1]), clean_field(spatial.top[2]), clean_field(spatial.top[3])
         }
     else
         fields = {client.session_id, tostring(client.command_id), action, "0", clean_field(spec.file)}
@@ -250,7 +339,9 @@ function Client.tick(client, now)
     end
 
     table.remove(client.pending, 1)
-    if action == "volume" then client.pending_volume_channels[channel_id] = nil end
+    if action == "volume" or action == "position3d" then
+        client.pending_volume_channels[channel_id] = nil
+    end
     client.last_write = now
     client.submitted = client.submitted + 1
     if action == "load" and spec.distance_enabled == true then
@@ -296,15 +387,24 @@ function Client.update_spatial(client, now)
             and #client.pending < MAX_PENDING
             and updates < MAX_SPATIAL_UPDATES_PER_TICK
         then
-            local volume = apply_distance_attenuation(entry.spec)
-            if entry.last_volume == nil or math.abs(volume - entry.last_volume) >= 0.01 then
-                if Client.enqueue_channel_volume(client, channel_id, volume, entry.spec.stable_key) then
-                    entry.last_volume = volume
+            if entry.spec.spatial_3d then
+                local spatial = client.read_spatial_state(entry.spec)
+                if spatial and Client.enqueue_channel_position(
+                    client, channel_id, spatial, entry.spec.stable_key) then
                     entry.last_update = now
                     updates = updates + 1
                 end
             else
-                entry.last_update = now
+                local volume = apply_distance_attenuation(entry.spec)
+                if entry.last_volume == nil or math.abs(volume - entry.last_volume) >= 0.01 then
+                    if Client.enqueue_channel_volume(client, channel_id, volume, entry.spec.stable_key) then
+                        entry.last_volume = volume
+                        entry.last_update = now
+                        updates = updates + 1
+                    end
+                else
+                    entry.last_update = now
+                end
             end
         end
     end
@@ -314,6 +414,7 @@ function Client.get_status(client)
     return {
         backendReady = client.backend_ready,
         groupDirectoriesReady = client.group_dirs_ready,
+        spatial3dReady = client.spatial_3d_ready,
         pending = #client.pending,
         submitted = client.submitted,
         failed = client.failed,

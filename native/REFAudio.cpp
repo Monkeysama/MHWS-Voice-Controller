@@ -17,12 +17,22 @@
 namespace {
 
 constexpr DWORD BASS_UNICODE = 0x80000000;
+constexpr DWORD BASS_DEVICE_3D = 4;
+constexpr DWORD BASS_SAMPLE_MONO = 2;
+constexpr DWORD BASS_SAMPLE_3D = 8;
 constexpr DWORD BASS_POS_BYTE = 0;
 constexpr DWORD BASS_ATTRIB_FREQ = 1;
 constexpr DWORD BASS_ATTRIB_VOL = 2;
 constexpr DWORD BASS_ACTIVE_PLAYING = 1;
 constexpr DWORD BASS_ACTIVE_PAUSED = 3;
+constexpr DWORD BASS_3DMODE_NORMAL = 0;
 constexpr std::size_t MAX_CHANNELS = 32;
+
+struct BassVector {
+    float x{};
+    float y{};
+    float z{};
+};
 
 using BASS_Init_t = BOOL(WINAPI*)(int, DWORD, DWORD, HWND, void*);
 using BASS_Free_t = BOOL(WINAPI*)();
@@ -42,6 +52,13 @@ using BASS_ChannelSetPosition_t = BOOL(WINAPI*)(DWORD, unsigned long long,
     DWORD);
 using BASS_ChannelGetAttribute_t = BOOL(WINAPI*)(DWORD, DWORD, float*);
 using BASS_ChannelSetAttribute_t = BOOL(WINAPI*)(DWORD, DWORD, float);
+using BASS_ChannelSet3DAttributes_t = BOOL(WINAPI*)(DWORD, int, float, float,
+    int, int, float);
+using BASS_ChannelSet3DPosition_t = BOOL(WINAPI*)(DWORD, const BassVector*,
+    const BassVector*, const BassVector*);
+using BASS_Set3DPosition_t = BOOL(WINAPI*)(const BassVector*, const BassVector*,
+    const BassVector*, const BassVector*);
+using BASS_Apply3D_t = void(WINAPI*)();
 
 struct BassApi {
     HMODULE module{};
@@ -60,6 +77,10 @@ struct BassApi {
     BASS_ChannelSetPosition_t set_position{};
     BASS_ChannelGetAttribute_t get_attribute{};
     BASS_ChannelSetAttribute_t set_attribute{};
+    BASS_ChannelSet3DAttributes_t set_3d_attributes{};
+    BASS_ChannelSet3DPosition_t set_3d_position{};
+    BASS_Set3DPosition_t set_listener_3d_position{};
+    BASS_Apply3D_t apply_3d{};
 
     bool load(const std::filesystem::path& file) {
         module = LoadLibraryW(file.c_str());
@@ -82,6 +103,10 @@ struct BassApi {
         BASS_LOAD(set_position, "BASS_ChannelSetPosition");
         BASS_LOAD(get_attribute, "BASS_ChannelGetAttribute");
         BASS_LOAD(set_attribute, "BASS_ChannelSetAttribute");
+        BASS_LOAD(set_3d_attributes, "BASS_ChannelSet3DAttributes");
+        BASS_LOAD(set_3d_position, "BASS_ChannelSet3DPosition");
+        BASS_LOAD(set_listener_3d_position, "BASS_Set3DPosition");
+        BASS_LOAD(apply_3d, "BASS_Apply3D");
 #undef BASS_LOAD
         return true;
     }
@@ -94,6 +119,7 @@ struct AudioChannel {
     float volume{1.0f};
     float speed{1.0f};
     double max_duration{};
+    bool spatial{};
 };
 
 HINSTANCE g_module{};
@@ -164,6 +190,18 @@ bool parse_channel_id(const std::string& value, std::uint32_t& result) {
         const auto parsed = std::stoull(value, &consumed, 10);
         if (consumed != value.size() || parsed > UINT32_MAX) return false;
         result = static_cast<std::uint32_t>(parsed);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parse_vector(const std::vector<std::string>& parts, std::size_t index,
+    BassVector& result) {
+    if (parts.size() <= index + 2) return false;
+    try {
+        result = {std::stof(parts[index]), std::stof(parts[index + 1]),
+            std::stof(parts[index + 2])};
         return true;
     } catch (...) {
         return false;
@@ -333,7 +371,9 @@ void write_utf8_audio_catalog(const std::filesystem::path& data_dir,
 // 在指定通道加载并立即播放文件；错误通过字符串返回，由工作线程统一写状态。
 bool load_channel(BassApi& bass, const std::filesystem::path& data_dir,
     const std::string& relative_name, float volume, float speed,
-    double max_duration, AudioChannel& channel, std::string& error) {
+    double max_duration, bool spatial, const BassVector* source_position,
+    float min_distance, float max_distance, AudioChannel& channel,
+    std::string& error) {
     free_channel(bass, channel);
     const auto relative_path = std::filesystem::path(
         utf8_to_wide(relative_name)).lexically_normal();
@@ -342,7 +382,9 @@ bool load_channel(BassApi& bass, const std::filesystem::path& data_dir,
         return false;
     }
     const auto path = data_dir / relative_path;
-    channel.stream = bass.create_stream(FALSE, path.c_str(), 0, 0, BASS_UNICODE);
+    const DWORD flags = BASS_UNICODE |
+        (spatial ? (BASS_SAMPLE_3D | BASS_SAMPLE_MONO) : 0);
+    channel.stream = bass.create_stream(FALSE, path.c_str(), 0, 0, flags);
     if (!channel.stream) {
         error = "bass_" + std::to_string(bass.error());
         return false;
@@ -352,10 +394,23 @@ bool load_channel(BassApi& bass, const std::filesystem::path& data_dir,
     channel.volume = clamp(volume, 0.0f, 1.0f);
     channel.speed = std::max(0.1f, speed);
     channel.max_duration = std::max(0.0, max_duration);
+    channel.spatial = spatial;
     bass.set_attribute(channel.stream, BASS_ATTRIB_VOL, channel.volume);
     if (channel.base_frequency > 0.0f)
         bass.set_attribute(channel.stream, BASS_ATTRIB_FREQ,
             channel.base_frequency * channel.speed);
+    if (spatial) {
+        const float minimum = std::max(0.01f, min_distance);
+        const float maximum = std::max(minimum, max_distance);
+        if (!bass.set_3d_attributes(channel.stream, BASS_3DMODE_NORMAL,
+            minimum, maximum, 360, 360, 0.0f) ||
+            !bass.set_3d_position(channel.stream, source_position, nullptr, nullptr)) {
+            error = "bass_3d_" + std::to_string(bass.error());
+            free_channel(bass, channel);
+            return false;
+        }
+        bass.apply_3d();
+    }
     if (!bass.play(channel.stream, TRUE)) {
         error = "bass_" + std::to_string(bass.error());
         free_channel(bass, channel);
@@ -377,7 +432,7 @@ void write_channels_status(BassApi& bass,
             active == BASS_ACTIVE_PAUSED ? "paused" : "stopped";
         output << id << '\t' << state << '\t' << seconds << '\t'
             << channel.volume << '\t' << channel.speed << '\t'
-            << channel.max_duration << '\n';
+            << channel.max_duration << '\t' << (channel.spatial ? "3d" : "2d") << '\n';
     }
     write_text(path, output.str());
 }
@@ -406,7 +461,7 @@ void run_audio_worker() {
     DeleteFileW(command_path.c_str());
     DeleteFileW(utf8_command_path.c_str());
     write_text(backend_path,
-        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1");
+        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1");
     write_utf8_audio_catalog(data_dir, catalog_path);
 
     BassApi bass;
@@ -415,7 +470,7 @@ void run_audio_worker() {
         CloseHandle(mutex);
         return;
     }
-    if (!bass.init(-1, 44100, 0, nullptr, nullptr)) {
+    if (!bass.init(-1, 44100, BASS_DEVICE_3D, nullptr, nullptr)) {
         write_status(status_path, "error", "bass_init_" +
             std::to_string(bass.error()));
         CloseHandle(mutex);
@@ -460,12 +515,13 @@ void run_audio_worker() {
             if (parts.size() >= 3 && !parts[0].empty()) {
                 const auto& action = parts[2];
                 std::uint32_t channel_id = 0;
-                const bool channelized_load = action == "load" &&
+                const bool is_load = action == "load" || action == "load3d";
+                const bool channelized_load = is_load &&
                     parts.size() >= 7 && parse_channel_id(parts[3], channel_id);
                 const bool command_has_value = action == "seek" ||
                     action == "volume" || action == "speed" ||
-                    action == "max_duration";
-                const bool channelized_command = action != "load" &&
+                    action == "max_duration" || action == "position3d";
+                const bool channelized_command = !is_load &&
                     parts.size() >= (command_has_value ? 5u : 4u) &&
                     parse_channel_id(parts[3], channel_id);
                 const bool channelized = channelized_load || channelized_command;
@@ -480,7 +536,7 @@ void run_audio_worker() {
                         if (!ensure_group_audio_directory(data_dir, parts[4], error))
                             write_status(status_path, "error", error);
                     }
-                } else if (action == "load") {
+                } else if (is_load) {
                     const std::size_t path_index = channelized ? 4 : 3;
                     if ((!channelized && parts.size() >= 6) || channelized_load) {
                         const bool new_channel = channels.find(channel_id) == channels.end();
@@ -491,9 +547,30 @@ void run_audio_worker() {
                             std::string error;
                             const double max_duration = parts.size() > path_index + 3 ?
                                 parse_float(parts[path_index + 3]) : 0.0;
+                            const bool spatial = action == "load3d";
+                            BassVector source{}, listener{}, front{}, top{};
+                            const std::size_t spatial_index = path_index + 4;
+                            const bool spatial_values = !spatial ||
+                                (parse_vector(parts, spatial_index, source) &&
+                                parts.size() > spatial_index + 4 &&
+                                parse_vector(parts, spatial_index + 5, listener) &&
+                                parse_vector(parts, spatial_index + 8, front) &&
+                                parse_vector(parts, spatial_index + 11, top));
+                            if (!spatial_values) {
+                                write_status(status_path, "error", "invalid_3d_values");
+                                channels.erase(channel_id);
+                                last_command = command;
+                                continue;
+                            }
+                            if (spatial) {
+                                bass.set_listener_3d_position(&listener, nullptr, &front, &top);
+                            }
                             if (!load_channel(bass, data_dir, parts[path_index],
                                 parse_float(parts[path_index + 1]),
                                 parse_float(parts[path_index + 2]), max_duration,
+                                spatial, spatial ? &source : nullptr,
+                                spatial ? parse_float(parts[spatial_index + 3]) : 1.0f,
+                                spatial ? parse_float(parts[spatial_index + 4]) : 10000.0f,
                                 channel, error)) {
                                 channels.erase(channel_id);
                                 write_status(status_path, "error", error);
@@ -529,6 +606,16 @@ void run_audio_worker() {
                         } else if (action == "max_duration" && parts.size() > value_index) {
                             channel.max_duration = std::max(0.0f,
                                 parse_float(parts[value_index]));
+                        } else if (action == "position3d" && channel.spatial) {
+                            BassVector source{}, listener{}, front{}, top{};
+                            if (parse_vector(parts, value_index, source) &&
+                                parse_vector(parts, value_index + 3, listener) &&
+                                parse_vector(parts, value_index + 6, front) &&
+                                parse_vector(parts, value_index + 9, top)) {
+                                bass.set_3d_position(channel.stream, &source, nullptr, nullptr);
+                                bass.set_listener_3d_position(&listener, nullptr, &front, &top);
+                                bass.apply_3d();
+                            }
                         }
                     }
                 }
