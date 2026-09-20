@@ -1556,6 +1556,7 @@ re.on_frame(function()
         queue_runtime_message("GAME_AUDIO_PLAY_FAILED\tkey=" .. tostring(replay_result.stable_key)
             .. "\treason=" .. tostring(replay_result.reason))
     end
+    REFAudioClient.update_spatial(replacement_client, now)
     local audio_result = REFAudioClient.tick(replacement_client, now)
     if audio_result and audio_result.kind == "submitted" then
         if audio_result.source == "test" then

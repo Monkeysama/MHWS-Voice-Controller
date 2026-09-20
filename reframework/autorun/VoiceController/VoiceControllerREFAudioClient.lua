@@ -7,6 +7,7 @@ local BACKEND_PATH = "REFAudio\\audio_backend.txt"
 local COMMAND_PATH = "REFAudio\\audio_command.txt"
 local MIN_COMMAND_INTERVAL = 0.05
 local MAX_PENDING = 64
+local SPATIAL_UPDATE_INTERVAL = 0.1
 local DISTANCE_REFERENCE = 1.5
 local DISTANCE_MAX = 40.0
 local DISTANCE_ROLLOFF = 1.0
@@ -96,6 +97,9 @@ function Client.new(file_api)
         preflight_file = nil,
         preflight_ready = false,
         preflight_error = nil,
+        spatial_channels = {},
+        spatial_snapshot = nil,
+        spatial_snapshot_at = -1,
         read_all = file_api.read_all or read_all,
         file_exists = file_api.file_exists or file_exists,
         write_all = file_api.write_all or write_all
@@ -132,6 +136,23 @@ function Client.enqueue_load(client, spec)
         return false
     end
     client.pending[#client.pending + 1] = spec
+    return true
+end
+
+-- 向原生端追加指定通道的音量更新；更新仍由单写者命令队列节流。
+function Client.enqueue_channel_volume(client, channel_id, volume, stable_key)
+    if #client.pending >= MAX_PENDING then
+        client.dropped = client.dropped + 1
+        client.last_error = "queue_full"
+        return false
+    end
+    client.pending[#client.pending + 1] = {
+        source = "spatial",
+        action = "volume",
+        channel_id = channel_id,
+        volume = volume,
+        stable_key = stable_key
+    }
     return true
 end
 
@@ -185,19 +206,27 @@ function Client.tick(client, now)
         return fail_front(client, "audio_file_missing")
     end
 
-    local channel_id = client.next_channel_id
-    client.next_channel_id = client.next_channel_id + 1
+    local channel_id = spec.channel_id
+    if action == "load" then
+        channel_id = client.next_channel_id
+        client.next_channel_id = client.next_channel_id + 1
+    end
     client.command_id = client.command_id + 1
-    local fields = {
-        client.session_id,
-        tostring(client.command_id),
-        action,
-        tostring(channel_id),
-        clean_field(spec.file),
-        clean_field(apply_distance_attenuation(spec)),
-        clean_field(spec.speed or 1),
-        clean_field((spec.max_duration_ms or 0) / 1000)
-    }
+    local fields
+    if action == "load" then
+        fields = {
+            client.session_id, tostring(client.command_id), action, tostring(channel_id),
+            clean_field(spec.file), clean_field(apply_distance_attenuation(spec)),
+            clean_field(spec.speed or 1), clean_field((spec.max_duration_ms or 0) / 1000)
+        }
+    elseif action == "volume" then
+        fields = {
+            client.session_id, tostring(client.command_id), action, tostring(channel_id),
+            clean_field(spec.volume or 1)
+        }
+    else
+        fields = {client.session_id, tostring(client.command_id), action, "0", clean_field(spec.file)}
+    end
 
     local write_ok, write_error = client.write_all(COMMAND_PATH, table.concat(fields, "\t"))
     if not write_ok then
@@ -215,6 +244,9 @@ function Client.tick(client, now)
     table.remove(client.pending, 1)
     client.last_write = now
     client.submitted = client.submitted + 1
+    if action == "load" and spec.distance_enabled == true then
+        client.spatial_channels[channel_id] = {spec = spec, last_update = now}
+    end
     client.last_error = nil
     return {
         kind = "submitted",
@@ -222,6 +254,39 @@ function Client.tick(client, now)
         source = spec.source or "replacement",
         stable_key = spec.stable_key
     }
+end
+
+-- 帧线程按音频通道快照更新移动声源的距离音量；没有快照时保守地保留通道引用。
+function Client.update_spatial(client, now)
+    local active = {}
+    if now - client.spatial_snapshot_at >= SPATIAL_UPDATE_INTERVAL then
+        client.spatial_snapshot = client.read_all("REFAudio\\audio_channels.txt")
+        client.spatial_snapshot_at = now
+    end
+    local snapshot = client.spatial_snapshot
+    if type(snapshot) == "string" and snapshot ~= "" then
+        for line in string.gmatch(snapshot, "[^\r\n]+") do
+            local channel_id = string.match(line, "^(%d+)")
+            if channel_id then active[channel_id] = true end
+        end
+    end
+    for channel_id, entry in pairs(client.spatial_channels) do
+        if snapshot ~= nil and snapshot ~= "" and not active[tostring(channel_id)] then
+            client.spatial_channels[channel_id] = nil
+        elseif now - entry.last_update >= SPATIAL_UPDATE_INTERVAL
+            and #client.pending < MAX_PENDING
+        then
+            local volume = apply_distance_attenuation(entry.spec)
+            if entry.last_volume == nil or math.abs(volume - entry.last_volume) >= 0.01 then
+                if Client.enqueue_channel_volume(client, channel_id, volume, entry.spec.stable_key) then
+                    entry.last_volume = volume
+                    entry.last_update = now
+                end
+            else
+                entry.last_update = now
+            end
+        end
+    end
 end
 
 function Client.get_status(client)
@@ -234,7 +299,12 @@ function Client.get_status(client)
         dropped = client.dropped,
         lastError = client.last_error,
         preflightReady = client.preflight_ready,
-        preflightError = client.preflight_error
+        preflightError = client.preflight_error,
+        spatialChannels = (function()
+            local count = 0
+            for _ in pairs(client.spatial_channels) do count = count + 1 end
+            return count
+        end)()
     }
 end
 
