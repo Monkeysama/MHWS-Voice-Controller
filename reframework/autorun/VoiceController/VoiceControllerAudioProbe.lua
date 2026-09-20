@@ -149,6 +149,22 @@ local function register_scene_container(container, source_object)
     }
 end
 
+-- 判断组件是否为声音容器；NPC 使用 SoundNpcContainer 子类，不能只比较精确类型名。
+local function is_sound_container_type(type_def)
+    if type_def == nil then return false end
+    local ok, full_name = pcall(type_def.get_full_name, type_def)
+    if ok and (tostring(full_name) == "soundlib.SoundContainer"
+        or tostring(full_name) == "app.SoundNpcContainer") then
+        return true
+    end
+    local parent_ok, parent = pcall(type_def.get_parent_type, type_def)
+    if parent_ok and parent ~= nil then
+        local parent_name_ok, parent_name = pcall(parent.get_full_name, parent)
+        return parent_name_ok and tostring(parent_name) == "soundlib.SoundContainer"
+    end
+    return false
+end
+
 -- 从 GameObject 组件和 Transform 子树收集 SoundContainer；失败的对象分支直接跳过。
 local function scan_game_object(root, visited, depth)
     if root == nil or depth > 32 then return end
@@ -163,7 +179,7 @@ local function scan_game_object(root, visited, depth)
             local type_ok, type_def = pcall(component.get_type_definition, component)
             local name_ok, full_name = false, nil
             if type_ok and type_def then name_ok, full_name = pcall(type_def.get_full_name, type_def) end
-            if name_ok and tostring(full_name) == "soundlib.SoundContainer" then
+            if name_ok and is_sound_container_type(type_def) then
                 register_scene_container(component, root)
             end
         end
@@ -185,10 +201,10 @@ local function discover_saved_source_containers(category)
     local wanted = saved_source_names[category]
     local found = false
     local ready = false
-    local function consider(object)
+    local function consider(object, allow_name_mismatch)
         if object == nil then return end
         local ok, name = pcall(object.call, object, "get_Name")
-        if ok and wanted[tostring(name)] then
+        if allow_name_mismatch or (ok and wanted[tostring(name)]) then
             scan_game_object(object, {}, 0)
             found = true
         end
@@ -206,14 +222,26 @@ local function discover_saved_source_containers(category)
     elseif category == "otomo" then
         pcall(function()
             local manager = sdk.get_managed_singleton("app.OtomoManager")
-            local controls = manager and manager:call("get_OtomoManagedControlList")
-            local elements = controls and controls:get_elements()
-            ready = elements ~= nil
-            for _, control in ipairs(elements or {}) do
-                if control then consider(control:call("get_OtomoFace")) end
-            end
             local master = manager and manager:call("getMasterOtomoManagedControl")
-            if master then consider(master:call("get_OtomoFace")) end
+            if master then
+                consider(master:call("get_OtomoFace"), true)
+                ready = true
+            else
+                -- 主坐骑尚未生成时只检查少量候选，避免重载期间遍历整个 108 项控制数组。
+                local controls = manager and manager:call("get_OtomoManagedControlList")
+                local elements = controls and controls:get_elements()
+                ready = elements ~= nil
+                local checked = 0
+                for _, control in ipairs(elements or {}) do
+                    if control and checked < 8 then
+                        local face = control:call("get_OtomoFace")
+                        if face then
+                            consider(face, true)
+                            checked = checked + 1
+                        end
+                    end
+                end
+            end
         end)
     end
     saved_source_discovered[category] = ready
