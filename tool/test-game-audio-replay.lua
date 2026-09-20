@@ -27,7 +27,9 @@ assert(not ok and err == "replay_unavailable")
 
 print("VoiceControllerGameAudioReplay tests passed")
 
+local resolve_calls = 0
 local resolved = Replay.new({resolve_descriptor = function(key, metadata)
+    resolve_calls = resolve_calls + 1
     if key == "30:40" and metadata.category == "player" then
         return {container = "resolved-container", offset_joint_hash = 0}
     end
@@ -38,6 +40,18 @@ end})
 assert(Replay.can_resolve(resolved, "30:40", {category = "player"}))
 assert(Replay.enqueue(resolved, "30:40", {category = "player"}))
 assert(Replay.tick(resolved).kind == "submitted")
+assert(resolve_calls == 1)
+
+local unresolved_calls = 0
+local unresolved = Replay.new({resolve_descriptor = function()
+    unresolved_calls = unresolved_calls + 1
+    return nil
+end})
+assert(not Replay.can_resolve(unresolved, "99:100", {}))
+assert(not Replay.can_resolve(unresolved, "99:100", {}))
+assert(unresolved_calls == 1)
+Replay.invalidate_resolution(unresolved)
+assert(not Replay.can_resolve(unresolved, "99:100", {}) and unresolved_calls == 2)
 
 local trigger = {call = function(_, method)
     return ({get_EventId = 30, get_TriggerId = 40})[method]

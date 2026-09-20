@@ -65,6 +65,8 @@ local next_container_scan = 0
 local scene_containers = {}
 local scene_container_keys = {}
 local scene_containers_ready = false
+local scene_scan_root_key = nil
+local scene_scan_retry_at = 0
 local replacement_runtime = ReplacementRuntime.compile({})
 local replacement_config = nil
 local config_manager = nil
@@ -177,15 +179,24 @@ end
 
 -- 以玩家对象为根扫描当前场景；后续自然事件会继续登记 NPC/怪物等临时对象的容器。
 local function scan_scene_containers(now)
-    if now < next_container_scan then return end
-    next_container_scan = now + 2.0
+    if now < next_container_scan or now < scene_scan_retry_at then return end
     local ok, root = pcall(function()
         local manager = sdk.get_managed_singleton("app.PlayerManager")
         local player = manager and manager:call("getMasterPlayer")
         return player and player:call("get_Object")
     end)
-    if ok and root then scan_game_object(root, {}, 0) end
+    if not ok or not root then
+        scene_scan_retry_at = now + 5.0
+        return
+    end
+    local address_ok, address = pcall(root.get_address, root)
+    local root_key = address_ok and address and tostring(address) or tostring(root)
+    if scene_containers_ready and scene_scan_root_key == root_key then return end
+    next_container_scan = now + 0.5
+    scan_game_object(root, {}, 0)
+    scene_scan_root_key = root_key
     scene_containers_ready = #scene_containers > 0
+    GameAudioReplay.invalidate_resolution(game_audio_replay)
 end
 
 -- 从当前场景容器重建持久收藏的重放描述；不依赖 EMV 手动触发，也不写入近期事件。
@@ -637,12 +648,21 @@ local function is_voice_path(path)
         or string.find(lowered, "event/event_dia_player", 1, true) ~= nil
 end
 
--- 在帧线程一次性建立玩家语音 ID 索引；Hook 只读取该表，不遍历托管集合。
-local function try_build_voice_index()
-    if voice_index_ready or os.clock() < next_index_attempt then return end
-    next_index_attempt = os.clock() + 2.0
+local voice_index_build_items = nil
+local voice_index_build_cursor = 1
+local voice_index_build_count = 0
+local VOICE_INDEX_BATCH = 64
 
-    local ok, count = pcall(function()
+-- 在帧线程分批建立玩家语音 ID 索引；Hook 只读取已完成的表，不遍历托管集合。
+local function try_build_voice_index()
+    local now = os.clock()
+    if voice_index_ready then return end
+    if voice_index_build_items == nil then
+        if now < next_index_attempt then return end
+        next_index_attempt = now + 1.0
+    end
+    if voice_index_build_items == nil then
+        local ok, items = pcall(function()
         local player_manager = sdk.get_managed_singleton("app.PlayerManager")
         local player = player_manager and player_manager:call("getMasterPlayer")
         local game_object = player and player:call("get_Object")
@@ -666,32 +686,44 @@ local function try_build_voice_index()
         local list_data = sound_container:call("get_AllTriggerInfoListData")
         local items = list_data and list_data._items
         if not items then return nil end
+        local snapshot = {}
+        for _, data in pairs(items) do snapshot[#snapshot + 1] = data end
+        return snapshot
+        end)
+        if not ok or type(items) ~= "table" or #items == 0 then return end
+        voice_index_build_items = items
+        voice_index_build_cursor = 1
+        voice_index_build_count = 0
+    end
 
-        local indexed = 0
-        for _, data in pairs(items) do
-            if data then
-                local path = data:call("get_Path")
-                if is_voice_path(path) then
-                    local trigger_array = data:call("get_TriggerInfoList")
-                    local triggers = trigger_array and trigger_array:get_elements()
-                    for _, trigger in ipairs(triggers or {}) do
-                        local event_id = trigger:call("get_EventId")
-                        local trigger_id = trigger:call("get_TriggerId")
-                        if event_id and trigger_id
-                            and event_id ~= 4294967295 and trigger_id ~= 4294967295
-                        then
-                            voice_index[tostring(event_id) .. ":" .. tostring(trigger_id)] = tostring(path)
-                            indexed = indexed + 1
-                        end
+    local processed = 0
+    while voice_index_build_cursor <= #voice_index_build_items and processed < VOICE_INDEX_BATCH do
+        local data = voice_index_build_items[voice_index_build_cursor]
+        voice_index_build_cursor = voice_index_build_cursor + 1
+        processed = processed + 1
+        if data then
+            local path = data:call("get_Path")
+            if is_voice_path(path) then
+                local trigger_array = data:call("get_TriggerInfoList")
+                local triggers = trigger_array and trigger_array:get_elements()
+                for _, trigger in ipairs(triggers or {}) do
+                    local event_id = trigger:call("get_EventId")
+                    local trigger_id = trigger:call("get_TriggerId")
+                    if event_id and trigger_id
+                        and event_id ~= 4294967295 and trigger_id ~= 4294967295
+                    then
+                        voice_index[tostring(event_id) .. ":" .. tostring(trigger_id)] = tostring(path)
+                        voice_index_build_count = voice_index_build_count + 1
                     end
                 end
             end
         end
-        return indexed
-    end)
-
-    if ok and count then
+    end
+    if voice_index_build_cursor > #voice_index_build_items then
+        local count = voice_index_build_count
+        voice_index_build_items = nil
         voice_index_ready = true
+        GameAudioReplay.invalidate_resolution(game_audio_replay)
         append("VOICE_INDEX_READY\tentries=" .. tostring(count))
     end
 end

@@ -124,6 +124,7 @@ function Replay.new(options)
     options = options or {}
     return {
         descriptors = {},
+        unresolved = {},
         descriptor_order = {},
         pending = {},
         active = false,
@@ -138,11 +139,21 @@ end
 -- 为持久收藏提供当前场景解析入口；解析只在页面请求播放或查询可用性时执行。
 function Replay.resolve(replay, stable_key, metadata)
     if Replay.has(replay, stable_key) then return replay.descriptors[stable_key] end
+    if replay.unresolved[stable_key] then return nil end
     if type(replay.resolve_descriptor) ~= "function" then return nil end
     local ok, descriptor = pcall(replay.resolve_descriptor, stable_key, metadata)
-    if not ok or type(descriptor) ~= "table" then return nil end
+    if not ok or type(descriptor) ~= "table" then
+        replay.unresolved[stable_key] = true
+        return nil
+    end
     replay.descriptors[stable_key] = descriptor
+    replay.unresolved[stable_key] = nil
     return descriptor
+end
+
+-- 场景容器发生变化后允许之前失败的稳定键重新解析；成功描述无需重复扫描。
+function Replay.invalidate_resolution(replay)
+    replay.unresolved = {}
 end
 
 function Replay.can_resolve(replay, stable_key, metadata)
@@ -169,6 +180,7 @@ function Replay.capture(replay, request)
     }
     local previous = replay.descriptors[key]
     replay.descriptors[key] = descriptor
+    replay.unresolved[key] = nil
     -- 同一稳定键重复捕获只更新引用，不重复占用淘汰槽位，避免试听几百次后自我失效。
     if previous == nil then
         replay.descriptor_order[#replay.descriptor_order + 1] = {key = key, value = descriptor}
