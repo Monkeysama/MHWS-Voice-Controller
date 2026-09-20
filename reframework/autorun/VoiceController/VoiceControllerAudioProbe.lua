@@ -67,6 +67,8 @@ local scene_container_keys = {}
 local scene_containers_ready = false
 local scene_scan_root_key = nil
 local scene_scan_retry_at = 0
+local saved_source_names = {npc = {}, otomo = {}, player = {}, weapon = {}}
+local saved_source_discovered = {npc = false, otomo = false}
 local replacement_runtime = ReplacementRuntime.compile({})
 local replacement_config = nil
 local config_manager = nil
@@ -177,6 +179,47 @@ local function scan_game_object(root, visited, depth)
     end
 end
 
+-- 只按永久收藏中的来源对象名寻找 NPC/坐骑，避免重载后扫描整个场景对象树。
+local function discover_saved_source_containers(category)
+    if saved_source_discovered[category] then return end
+    local wanted = saved_source_names[category]
+    local found = false
+    local ready = false
+    local function consider(object)
+        if object == nil then return end
+        local ok, name = pcall(object.call, object, "get_Name")
+        if ok and wanted[tostring(name)] then
+            scan_game_object(object, {}, 0)
+            found = true
+        end
+    end
+    if category == "npc" then
+        pcall(function()
+            local manager = sdk.get_managed_singleton("app.NpcManager")
+            local list = manager and manager._NpcList
+            local elements = list and list:get_elements()
+            ready = elements ~= nil
+            for _, info in ipairs(elements or {}) do
+                if info then consider(info:call("get_Object")) end
+            end
+        end)
+    elseif category == "otomo" then
+        pcall(function()
+            local manager = sdk.get_managed_singleton("app.OtomoManager")
+            local controls = manager and manager:call("get_OtomoManagedControlList")
+            local elements = controls and controls:get_elements()
+            ready = elements ~= nil
+            for _, control in ipairs(elements or {}) do
+                if control then consider(control:call("get_OtomoFace")) end
+            end
+            local master = manager and manager:call("getMasterOtomoManagedControl")
+            if master then consider(master:call("get_OtomoFace")) end
+        end)
+    end
+    saved_source_discovered[category] = ready
+    if found then GameAudioReplay.invalidate_resolution(game_audio_replay) end
+end
+
 -- 以玩家对象为根扫描当前场景；后续自然事件会继续登记 NPC/怪物等临时对象的容器。
 local function scan_scene_containers(now)
     if now < next_container_scan or now < scene_scan_retry_at then return end
@@ -202,6 +245,9 @@ end
 -- 从当前场景容器重建持久收藏的重放描述；不依赖 EMV 手动触发，也不写入近期事件。
 local function resolve_persistent_descriptor(stable_key, metadata)
     if type(metadata) ~= "table" then return nil end
+    if metadata.category == "npc" or metadata.category == "otomo" then
+        discover_saved_source_containers(metadata.category)
+    end
     -- 玩家索引优先，避免多个容器拥有相同键时选到非玩家语音。
     if (metadata.category == "player" or metadata.category == "voice")
         and player_voice_container and player_voice_object
@@ -247,6 +293,16 @@ local function load_saved_events()
     local store, err = SavedEventStore.load(SAVED_EVENTS_CONFIG)
     saved_event_store = store
     saved_event_error = err
+    if store then
+        for _, event in ipairs(SavedEventStore.snapshot(store)) do
+            local category = event.category
+            local source = type(event.sourceObject) == "string"
+                and string.match(event.sourceObject, "^([^%[]+)") or nil
+            if source and saved_source_names[category] then
+                saved_source_names[category][source] = true
+            end
+        end
+    end
     if err then queue_runtime_message("SAVED_EVENTS_LOAD_FAILED\treason=" .. tostring(err)) end
 end
 
