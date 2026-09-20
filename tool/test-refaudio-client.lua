@@ -5,12 +5,16 @@ package.path = "reframework/autorun/?.lua;" .. package.path
 local Client = require("VoiceController/VoiceControllerREFAudioClient")
 local written = nil
 local channel_snapshot = ""
+local channel_reads = 0
 local client = Client.new({
     read_all = function(path)
         if path == "REFAudio\\audio_backend.txt" then
             return "REFAudio\t1\tmultichannel=1\tmax_channels=32"
         end
-        if path == "REFAudio\\audio_channels.txt" then return channel_snapshot end
+        if path == "REFAudio\\audio_channels.txt" then
+            channel_reads = channel_reads + 1
+            return channel_snapshot
+        end
         return nil
     end,
     file_exists = function(path)
@@ -22,6 +26,9 @@ local client = Client.new({
         return true
     end
 })
+
+Client.update_spatial(client, 0)
+assert(channel_reads == 0)
 
 local ready, preflight_error = Client.preflight(client, "VoiceController\\Audio\\test.wav", 0)
 assert(ready and preflight_error == nil)
@@ -129,5 +136,9 @@ assert(result and result.kind == "submitted" and result.source == "group-directo
 fields = {}
 for field in string.gmatch(written .. "\t", "([^\t]*)\t") do fields[#fields + 1] = field end
 assert(fields[3] == "ensure_dir" and fields[5] == "VoiceController\\Groups\\测试分组\\Audio")
+
+channel_snapshot = ""
+Client.update_spatial(client, 1.0)
+assert(Client.get_status(client).spatialChannels == 0)
 
 print("VoiceControllerREFAudioClient tests passed")

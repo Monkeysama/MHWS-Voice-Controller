@@ -8,6 +8,7 @@ local COMMAND_PATH = "REFAudio\\audio_command.txt"
 local MIN_COMMAND_INTERVAL = 0.05
 local MAX_PENDING = 64
 local SPATIAL_UPDATE_INTERVAL = 0.1
+local MAX_SPATIAL_UPDATES_PER_TICK = 4
 local DISTANCE_REFERENCE = 1.5
 local DISTANCE_MAX = 40.0
 local DISTANCE_ROLLOFF = 1.0
@@ -100,6 +101,8 @@ function Client.new(file_api)
         spatial_channels = {},
         spatial_snapshot = nil,
         spatial_snapshot_at = -1,
+        spatial_active_ids = {},
+        pending_volume_channels = {},
         read_all = file_api.read_all or read_all,
         file_exists = file_api.file_exists or file_exists,
         write_all = file_api.write_all or write_all
@@ -141,6 +144,7 @@ end
 
 -- 向原生端追加指定通道的音量更新；更新仍由单写者命令队列节流。
 function Client.enqueue_channel_volume(client, channel_id, volume, stable_key)
+    if client.pending_volume_channels[channel_id] then return true end
     if #client.pending >= MAX_PENDING then
         client.dropped = client.dropped + 1
         client.last_error = "queue_full"
@@ -153,6 +157,7 @@ function Client.enqueue_channel_volume(client, channel_id, volume, stable_key)
         volume = volume,
         stable_key = stable_key
     }
+    client.pending_volume_channels[channel_id] = true
     return true
 end
 
@@ -185,6 +190,9 @@ end
 local function fail_front(client, reason)
     local spec = client.pending[1]
     table.remove(client.pending, 1)
+    if spec and spec.action == "volume" then
+        client.pending_volume_channels[spec.channel_id] = nil
+    end
     client.failed = client.failed + 1
     client.last_error = reason
     return {
@@ -242,6 +250,7 @@ function Client.tick(client, now)
     end
 
     table.remove(client.pending, 1)
+    if action == "volume" then client.pending_volume_channels[channel_id] = nil end
     client.last_write = now
     client.submitted = client.submitted + 1
     if action == "load" and spec.distance_enabled == true then
@@ -258,29 +267,41 @@ end
 
 -- 帧线程按音频通道快照更新移动声源的距离音量；没有快照时保守地保留通道引用。
 function Client.update_spatial(client, now)
-    local active = {}
+    -- observe 模式和 Script Reset 后通常没有外部通道；此路径必须零 IO、零临时表。
+    if next(client.spatial_channels) == nil then
+        client.spatial_snapshot = nil
+        client.spatial_snapshot_at = now
+        return
+    end
     if now - client.spatial_snapshot_at >= SPATIAL_UPDATE_INTERVAL then
         client.spatial_snapshot = client.read_all("REFAudio\\audio_channels.txt")
         client.spatial_snapshot_at = now
-    end
-    local snapshot = client.spatial_snapshot
-    if type(snapshot) == "string" and snapshot ~= "" then
-        for line in string.gmatch(snapshot, "[^\r\n]+") do
-            local channel_id = string.match(line, "^(%d+)")
-            if channel_id then active[channel_id] = true end
+        local active = {}
+        if type(client.spatial_snapshot) == "string" then
+            for line in string.gmatch(client.spatial_snapshot, "[^\r\n]+") do
+                local channel_id = string.match(line, "^(%d+)")
+                if channel_id then active[channel_id] = true end
+            end
+            client.spatial_active_ids = active
         end
     end
+    local snapshot = client.spatial_snapshot
+    local updates = 0
     for channel_id, entry in pairs(client.spatial_channels) do
-        if snapshot ~= nil and snapshot ~= "" and not active[tostring(channel_id)] then
+        -- 文件存在且为空代表原生端已没有任何活动通道，必须清理旧对象引用。
+        if type(snapshot) == "string" and not client.spatial_active_ids[tostring(channel_id)] then
             client.spatial_channels[channel_id] = nil
+            client.pending_volume_channels[channel_id] = nil
         elseif now - entry.last_update >= SPATIAL_UPDATE_INTERVAL
             and #client.pending < MAX_PENDING
+            and updates < MAX_SPATIAL_UPDATES_PER_TICK
         then
             local volume = apply_distance_attenuation(entry.spec)
             if entry.last_volume == nil or math.abs(volume - entry.last_volume) >= 0.01 then
                 if Client.enqueue_channel_volume(client, channel_id, volume, entry.spec.stable_key) then
                     entry.last_volume = volume
                     entry.last_update = now
+                    updates = updates + 1
                 end
             else
                 entry.last_update = now
