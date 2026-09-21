@@ -2,7 +2,7 @@
 -- 在 REFramework Lua 线程观察自然音频事件；仅对精确匹配且替换音频已入队的请求执行配置的抑制策略。
 -- 日志资源由本脚本独占写入，使用固定容量文本避免无限增长。
 
-local VERSION = "audio-probe-v25"
+local VERSION = "audio-probe-v26"
 local ROOT = "VoiceController\\"
 local LOG = ROOT .. "audio_probe.log"
 local MAX_LINES = 1200
@@ -133,7 +133,7 @@ local catalog_last_error = nil
 local catalog_scanned_at = nil
 local catalog_signature = nil
 local catalog_snapshot = nil
-local blocked_source_prefixes = {"SoundLayerdRandomGenerator"}
+local blocked_source_prefixes = ConfigManager.default_blocked_source_prefixes()
 local runtime_messages = {}
 
 -- 登记当前场景中的声音容器；容器引用由重放模块持有，扫描只在帧线程低频执行。
@@ -525,14 +525,23 @@ local function reload_replacement_config(now)
     if now < next_config_reload then return end
     next_config_reload = now + CONFIG_RELOAD_INTERVAL
 
+    local config_file = io.open(REPLACEMENT_CONFIG, "rb")
+    local config_exists = config_file ~= nil
+    if config_file then config_file:close() end
     local ok, config = pcall(json.load_file, REPLACEMENT_CONFIG)
     local loaded = ok and type(config) == "table"
+    -- 正式包不携带用户配置；仅在文件确实不存在时启用首次启动默认值。
+    -- 已存在但损坏的文件仍保持加载失败，避免默认配置静默覆盖用户数据。
+    if not loaded and not config_exists then
+        config = ConfigManager.default_config()
+        loaded = true
+    end
     local fingerprint = loaded and config_fingerprint(config) or "load_failed"
     if fingerprint == replacement_config_fingerprint then return end
     replacement_config_fingerprint = fingerprint
     replacement_config = loaded and config or nil
     blocked_source_prefixes = loaded and type(config.blockedSourcePrefixes) == "table"
-        and config.blockedSourcePrefixes or {"SoundLayerdRandomGenerator"}
+        and config.blockedSourcePrefixes or ConfigManager.default_blocked_source_prefixes()
     replacement_config_schema = loaded and tonumber(config.schemaVersion) or 0
     replacement_mode = loaded and tostring(config.mode or "observe") or "observe"
     replacement_strategy = loaded and config.replaceStrategy or nil

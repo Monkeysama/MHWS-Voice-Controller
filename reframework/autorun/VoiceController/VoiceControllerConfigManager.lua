@@ -7,6 +7,30 @@ local GroupStore = require("VoiceController/VoiceControllerGroupStore")
 local Manager = {}
 
 local DEFAULT_GROUP_ID = "captured_audio"
+local DEFAULT_BLOCKED_SOURCE_PREFIXES = {"SoundLayerdRandomGenerator", "EnvPos"}
+
+-- 返回全新默认配置；用于正式包首次启动，调用方可安全修改而不会共享表引用。
+function Manager.default_config()
+    return {
+        schemaVersion = 2,
+        enabled = true,
+        mode = "observe",
+        replaceStrategy = "skip_original",
+        blockedSourcePrefixes = {
+            DEFAULT_BLOCKED_SOURCE_PREFIXES[1],
+            DEFAULT_BLOCKED_SOURCE_PREFIXES[2]
+        },
+        groups = {}
+    }
+end
+
+-- 返回默认屏蔽项副本；运行时使用副本，避免 UI 编辑污染模块常量。
+function Manager.default_blocked_source_prefixes()
+    return {
+        DEFAULT_BLOCKED_SOURCE_PREFIXES[1],
+        DEFAULT_BLOCKED_SOURCE_PREFIXES[2]
+    }
+end
 
 local function normalize_group_name(value)
     if type(value) ~= "string" then return nil end
@@ -398,6 +422,9 @@ end
 function Manager.new(config, catalog_snapshot, group_folders, present_folders)
     local copied, copy_error = copy_json(config)
     if not copied then return nil, {copy_error} end
+    if type(copied.blockedSourcePrefixes) ~= "table" then
+        copied.blockedSourcePrefixes = Manager.default_blocked_source_prefixes()
+    end
     local removed_groups = reconcile_group_folders(copied, group_folders, present_folders)
     local catalog_ready = type(catalog_snapshot) == "table"
         and type(catalog_snapshot.files) == "table"
