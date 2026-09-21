@@ -139,17 +139,26 @@ local runtime_messages = {}
 -- 登记当前场景中的声音容器；容器引用由重放模块持有，扫描只在帧线程低频执行。
 local function register_scene_container(container, source_object)
     if container == nil then return end
+    -- 以组件所属 GameObject 为权威重放锚点；自然请求的来源可能是已销毁的武器/特效临时对象。
+    local owner_ok, owner = pcall(container.call, container, "get_GameObject")
+    if owner_ok and owner ~= nil then source_object = owner end
     local key = nil
     local ok, address = pcall(container.get_address, container)
     if ok and address then key = tostring(address) end
     key = key or tostring(container)
-    if scene_container_keys[key] then return end
-    scene_container_keys[key] = true
-    scene_containers[#scene_containers + 1] = {
+    local existing = scene_container_keys[key]
+    if type(existing) == "table" then
+        existing.source_object = source_object or existing.source_object
+        existing.target_object = source_object or existing.target_object
+        return
+    end
+    local entry = {
         container = container,
         source_object = source_object,
         target_object = source_object
     }
+    scene_container_keys[key] = entry
+    scene_containers[#scene_containers + 1] = entry
     GameAudioReplay.invalidate_resolution(game_audio_replay)
 end
 
@@ -262,6 +271,12 @@ local function scan_scene_containers(now)
     local address_ok, address = pcall(root.get_address, root)
     local root_key = address_ok and address and tostring(address) or tostring(root)
     if scene_containers_ready and scene_scan_root_key == root_key then return end
+    -- 玩家根对象变化即代表场景/存档对象已重建；丢弃旧容器与旧 GameObject，避免跨场景重放悬空引用。
+    if scene_scan_root_key ~= nil and scene_scan_root_key ~= root_key then
+        scene_containers = {}
+        scene_container_keys = {}
+        scene_containers_ready = false
+    end
     next_container_scan = now + 0.5
     scan_game_object(root, {}, 0)
     scene_scan_root_key = root_key

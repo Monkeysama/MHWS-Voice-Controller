@@ -17,6 +17,12 @@ local function call(object, method, ...)
     return ok and result or nil
 end
 
+-- 获取声音容器实际所属的稳定游戏对象；武器动作请求里的 SrcGameObj 常是短生命周期特效对象，
+-- 请求结束后继续持有其托管引用也不能阻止底层对象失效。EMV Sound Player 同样使用容器所属对象重放。
+local function container_game_object(container)
+    return call(container, "get_GameObject")
+end
+
 local function find_trigger_in_list(list, descriptor)
     if list == nil then return nil end
     local items_ok, items = pcall(function() return list._items end)
@@ -82,23 +88,29 @@ end
 local function default_play(descriptor)
     local trigger = resolve_trigger_info(descriptor)
     if trigger == nil then return false, "trigger_info_not_found" end
+    local playback_object = container_game_object(descriptor.container)
+        or descriptor.source_object or descriptor.target_object
+    if playback_object == nil then return false, "playback_object_not_found" end
     local offset_joint_hash = descriptor.offset_joint_hash
     if offset_joint_hash == nil or tonumber(offset_joint_hash) == 0 then
         offset_joint_hash = call(trigger, "get_OffsetJointHash") or 0
         local field_ok, field_value = pcall(function() return trigger._OffsetJointHash end)
         if field_ok and field_value ~= nil then offset_joint_hash = field_value end
     end
-    local request = descriptor.container:call(
-        CREATE_REQUEST_SIGNATURE,
-        trigger, descriptor.source_object, descriptor.target_object,
+    -- 分阶段保护引擎调用，日志必须能区分 RequestInfo 构造失败与实际 trigger 失败。
+    local create_ok, request = pcall(descriptor.container.call, descriptor.container,
+        CREATE_REQUEST_SIGNATURE, trigger, playback_object, playback_object,
         offset_joint_hash, false, false, 0, CALLBACK_TYPE_NONE, nil, nil, nil, nil)
+    if not create_ok then return false, "request_create_exception." .. tostring(request) end
     if request == nil then return false, "request_create_failed" end
     pcall(request.add_ref, request)
     local container_set = pcall(function()
         request["<Container>k__BackingField"] = descriptor.container
     end)
     if not container_set then pcall(request.call, request, "set_Container", descriptor.container) end
-    local request_id = descriptor.container:call("trigger(soundlib.SoundManager.RequestInfo)", request)
+    local trigger_ok, request_id = pcall(descriptor.container.call, descriptor.container,
+        "trigger(soundlib.SoundManager.RequestInfo)", request)
+    if not trigger_ok then return false, "trigger_exception." .. tostring(request_id) end
     return true, {
         request_id = request_id and tostring(request_id) or nil,
         playing_id = tostring(call(request, "get_PlayingId") or "0"),
@@ -279,6 +291,8 @@ function Replay.tick(replay)
     if not ok or played ~= true then
         replay.failed = replay.failed + 1
         replay.last_error = ok and (detail or "replay_failed") or tostring(played)
+        -- 托管引用存在不代表底层 GameObject 仍有效；失败后淘汰描述符，允许下次从当前场景重新解析。
+        if replay.descriptors[stable_key] == descriptor then replay.descriptors[stable_key] = nil end
         replay.playback_states[stable_key] = {status = "failed", error = replay.last_error}
         return {kind = "error", stable_key = stable_key, reason = replay.last_error}
     end
