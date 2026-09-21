@@ -2,7 +2,7 @@
 -- 在 REFramework Lua 线程观察自然音频事件；仅对精确匹配且替换音频已入队的请求执行配置的抑制策略。
 -- 日志资源由本脚本独占写入，使用固定容量文本避免无限增长。
 
-local VERSION = "audio-probe-v22"
+local VERSION = "audio-probe-v25"
 local ROOT = "VoiceController\\"
 local LOG = ROOT .. "audio_probe.log"
 local MAX_LINES = 1200
@@ -32,6 +32,7 @@ local REFAudioClient = require("VoiceController/VoiceControllerREFAudioClient")
 local Utf8FileBridge = require("VoiceController/VoiceControllerUtf8FileBridge")
 local ReplacementRuntime = require("VoiceController/VoiceControllerReplacementRuntime")
 local VoiceControllerREFF = require("VoiceController/VoiceControllerREFF")
+local VoiceControllerBasicUI = require("VoiceController/VoiceControllerBasicUI")
 
 local lines = {}
 local pending = {}
@@ -41,6 +42,8 @@ local browser_npc_events = EventStore.new(120)
 local browser_otomo_events = EventStore.new(120)
 local browser_weapon_events = EventStore.new(120)
 local browser_unknown_events = EventStore.new(120)
+local browser_locked_events = EventStore.new(120)
+local recent_lock = {locked = false, category = "all", query = ""}
 local game_audio_replay = GameAudioReplay.new()
 local saved_event_store = nil
 local saved_event_error = nil
@@ -580,6 +583,28 @@ local function classify_audio_event(source_path, source_object)
     return "unknown"
 end
 
+-- 当前视图始终按分类接收事件；锁定后再叠加搜索词，保证其他事件不占用 120 条容量。
+local function matches_recent_lock(event)
+    if recent_lock.category ~= "all" and event.category ~= recent_lock.category then return false end
+    if not recent_lock.locked then return true end
+    local query = string.lower(tostring(recent_lock.query or ""))
+    if query == "" then return true end
+    -- sourcePath 对 NPC 等事件通常为空，不能用 ipairs 遍历含空洞的字段数组，
+    -- 否则 sourceObject 会因前项为 nil 而永远无法参与匹配。
+    if string.find(string.lower(tostring(event.stableKey or "")), query, 1, true) then return true end
+    if string.find(string.lower(tostring(event.sourcePath or "")), query, 1, true) then return true end
+    if string.find(string.lower(tostring(event.sourceObject or "")), query, 1, true) then return true end
+    if string.find(string.lower(tostring(event.origin or "")), query, 1, true) then return true end
+    return false
+end
+
+-- 分类队列与锁定队列必须各自拥有事件表；共享引用会让聚合次数在两个队列中重复累加。
+local function copy_browser_event(event)
+    local copied = {}
+    for key, value in pairs(event) do copied[key] = value end
+    return copied
+end
+
 -- 为自然请求追加 Wwise Duration 位；保留游戏原有回调标志，失败时不阻断原始播放。
 local function enable_duration_callback(request)
     local ok, callback = pcall(request.call, request, "get_Callback")
@@ -909,6 +934,13 @@ local function write_runtime_snapshots(now)
         unknownCaptured = unknown_captured,
         droppedPending = dropped_pending,
         recentCount = recent_events.size,
+        recentView = {
+            locked = recent_lock.locked,
+            category = recent_lock.category,
+            query = recent_lock.query,
+            count = browser_locked_events.size,
+            totalMatched = browser_locked_events.total_pushed
+        },
         audioCatalog = {
             ready = catalog_ready,
             count = catalog_count,
@@ -991,6 +1023,10 @@ local function flush_pending()
             local browser_store = browser_stores[entry.event.category] or browser_unknown_events
             -- 浏览器列表按稳定键聚合整个当前会话；类别窗口只限制不同稳定键的数量。
             EventStore.push_coalesced(browser_store, entry.event, math.huge)
+            if matches_recent_lock(entry.event) then
+                EventStore.push_coalesced(
+                    browser_locked_events, copy_browser_event(entry.event), math.huge)
+            end
             messages[#messages + 1] = entry.message
             total_captured = total_captured + 1
             if entry.event.category ~= "unknown" then
@@ -1004,7 +1040,7 @@ local function flush_pending()
     end
     if #pending_durations > 0 then
         local stores = {browser_player_events, browser_npc_events, browser_otomo_events,
-            browser_weapon_events, browser_unknown_events}
+            browser_weapon_events, browser_unknown_events, browser_locked_events}
         local remaining = {}
         for _, item in ipairs(pending_durations) do
             local stable_key = item.stable_key or playing_stable_keys[item.playing_id]
@@ -1426,7 +1462,7 @@ append("END\t" .. VERSION)
 -- 否则用户在页面上看到的事件可能已被环形队列淘汰，导致收藏报 recent_event_not_found。
 local function find_recent_event_by_key(stable_key)
     local stores = {browser_player_events, browser_npc_events, browser_otomo_events,
-        browser_weapon_events, browser_unknown_events}
+        browser_weapon_events, browser_unknown_events, browser_locked_events}
     local found = nil
     for _, store in ipairs(stores) do
         local event = EventStore.find_latest(store, stable_key)
@@ -1468,8 +1504,8 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
     end,
     get_recent_events = function()
         local result = {}
-        local stores = {browser_player_events, browser_npc_events, browser_otomo_events,
-            browser_weapon_events, browser_unknown_events}
+        -- 页面只读取当前视图窗口；分类切换和锁定条件变化都会在服务端重建该窗口。
+        local stores = {browser_locked_events}
         for _, store in ipairs(stores) do
             for _, event in ipairs(EventStore.to_array(store)) do
                 event.replayable = GameAudioReplay.is_available(game_audio_replay, event.stableKey)
@@ -1481,6 +1517,24 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
         end
         table.sort(result, function(left, right) return (left.sequence or 0) < (right.sequence or 0) end)
         return result
+    end,
+    set_recent_lock = function(options)
+        options = type(options) == "table" and options or {}
+        local category = tostring(options.category or "all")
+        local valid_categories = {all = true, player = true, npc = true,
+            otomo = true, weapon = true, unknown = true}
+        if not valid_categories[category] then return false, {"invalid_recent_category"} end
+        recent_lock = {
+            locked = options.locked == true,
+            category = category,
+            query = tostring(options.query or "")
+        }
+        -- 每次分类切换、锁定、解锁或搜索条件修改都从零开始，旧事件和次数不得带入。
+        browser_locked_events = EventStore.new(120)
+        queue_runtime_message(string.format(
+            "RECENT_LOCK\tenabled=%s\tcategory=%s\tquery=%s",
+            tostring(recent_lock.locked), recent_lock.category, recent_lock.query))
+        return true
     end,
     get_saved_events = function()
         local events = saved_event_store and SavedEventStore.snapshot(saved_event_store) or {}
@@ -1557,11 +1611,17 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
     end,
     remove_saved_event = function(stable_key)
         if not saved_event_store then return false, {saved_event_error or "saved_events_unavailable"} end
-        local references = config_manager and ConfigManager.find_rule_references(config_manager, stable_key) or {}
-        if #references > 0 then return false, {"saved_event_in_use." .. table.concat(references, ",")} end
+        -- 收藏记录与分组规则是两个独立的持久化边界；规则只依赖稳定键，不应阻止删除收藏。
+        -- 分组引用查询仍保留给诊断和界面展示使用，但删除不会级联修改任何分组配置。
         local removed, err = SavedEventStore.remove(saved_event_store, stable_key)
         if removed then queue_runtime_message("SAVED_EVENT_REMOVED\tkey=" .. tostring(stable_key)) end
         return removed, {err}
+    end,
+    update_saved_event_note = function(stable_key, note)
+        if not saved_event_store then return false, {saved_event_error or "saved_events_unavailable"} end
+        local updated, err = SavedEventStore.update_note(saved_event_store, stable_key, note)
+        if updated then queue_runtime_message("SAVED_EVENT_NOTE_UPDATED\tkey=" .. tostring(stable_key)) end
+        return updated, {err}
     end,
     play_event = function(stable_key)
         local event = nil
@@ -1583,6 +1643,19 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
         if not status.groupDirectoriesReady then return false, {"group_directory_backend_unavailable"} end
         local queued = REFAudioClient.enqueue_ensure_group_directory(replacement_client, path)
         return queued, queued and nil or {"audio_queue_full"}
+    end,
+    reload_config = function()
+        -- 只重建磁盘配置、分组扫描和规则运行时；不得从插件内部触发 Script Reset，
+        -- 否则会在当前回调尚未退出时重复注册 Hook 和 REFF 服务。
+        replacement_config_fingerprint = nil
+        next_config_reload = 0
+        reload_replacement_config(os.clock())
+        group_signature = nil
+        next_group_scan = 0
+        scan_groups(os.clock())
+        local ready = config_manager ~= nil
+        if ready then queue_runtime_message("CONFIG_EDITOR_RELOADED") end
+        return ready, ready and nil or {config_manager_error or "config_reload_failed"}
     end,
     save_config = function(manager)
         if manager ~= config_manager then return false, "stale_editor" end
@@ -1628,6 +1701,69 @@ if reff_handle then
     append("REFF_SERVICE_READY\tplugin=voice-controller")
 else
     append("REFF_SERVICE_UNAVAILABLE\treason=" .. tostring(reff_error))
+end
+
+-- REFramework 基础面板只暴露语音包消费所需的分组开关。
+-- REFF 编辑器存在未保存修改时拒绝基础面板写入，避免把完整编辑草稿意外一并保存。
+local basic_ui_ready, basic_ui_error = VoiceControllerBasicUI.register({
+    is_reff_connected = function()
+        return reff_handle ~= nil
+    end,
+    get_groups = function()
+        if config_manager == nil then
+            return nil, config_manager_error or "config_not_loaded"
+        end
+        local snapshot = ConfigManager.snapshot(config_manager)
+        local groups = {}
+        for _, group in ipairs(type(snapshot.groups) == "table" and snapshot.groups or {}) do
+            groups[#groups + 1] = {
+                id = tostring(group.id),
+                name = tostring(group.name or group.id),
+                enabled = group.enabled ~= false
+            }
+        end
+        return groups
+    end,
+    set_group_enabled = function(group_id, enabled)
+        local manager = config_manager
+        if manager == nil then return false, config_manager_error or "config_not_loaded" end
+        if manager.dirty then return false, "pending_reff_changes" end
+
+        local updated, update_error = ConfigManager.update_group(manager, group_id, {
+            enabled = enabled == true
+        })
+        if not updated then return false, update_error end
+
+        -- 启用状态只属于本机 replacement.json；不得改写可分发的 group.json。
+        local saved, save_error = ConfigManager.save(manager, REPLACEMENT_CONFIG, {
+            utf8_read = Utf8FileBridge.read,
+            utf8_write = Utf8FileBridge.write,
+            skip_manifests = true,
+            allow_missing_files = true
+        })
+        if not saved then
+            -- 保存失败后立即丢弃内存事务并从磁盘恢复，避免界面显示未落盘的状态。
+            replacement_config_fingerprint = nil
+            next_config_reload = 0
+            reload_replacement_config(os.clock())
+            queue_runtime_message(string.format(
+                "BASIC_UI_GROUP_SAVE_FAILED\tgroup=%s\treason=%s",
+                tostring(group_id), tostring(save_error)))
+            return false, save_error
+        end
+
+        replacement_config_fingerprint = nil
+        next_config_reload = 0
+        queue_runtime_message(string.format(
+            "BASIC_UI_GROUP_SAVED\tgroup=%s\tenabled=%s",
+            tostring(group_id), tostring(enabled == true)))
+        return true
+    end
+})
+if basic_ui_ready then
+    append("BASIC_UI_READY")
+else
+    append("BASIC_UI_UNAVAILABLE\treason=" .. tostring(basic_ui_error))
 end
 
 re.on_frame(function()

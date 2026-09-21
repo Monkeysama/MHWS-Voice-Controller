@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
@@ -20,6 +21,8 @@ constexpr DWORD BASS_UNICODE = 0x80000000;
 constexpr DWORD BASS_DEVICE_3D = 4;
 constexpr DWORD BASS_SAMPLE_MONO = 2;
 constexpr DWORD BASS_SAMPLE_3D = 8;
+constexpr DWORD BASS_SAMPLE_OVER_VOL = 0x10000;
+constexpr DWORD BASS_STREAM_DECODE = 0x200000;
 constexpr DWORD BASS_POS_BYTE = 0;
 constexpr DWORD BASS_ATTRIB_FREQ = 1;
 constexpr DWORD BASS_ATTRIB_VOL = 2;
@@ -27,6 +30,7 @@ constexpr DWORD BASS_ACTIVE_PLAYING = 1;
 constexpr DWORD BASS_ACTIVE_PAUSED = 3;
 constexpr DWORD BASS_3DMODE_NORMAL = 0;
 constexpr std::size_t MAX_CHANNELS = 32;
+constexpr float MAX_VOLUME = 2.0f;
 
 struct BassVector {
     float x{};
@@ -45,6 +49,7 @@ using BASS_ChannelPause_t = BOOL(WINAPI*)(DWORD);
 using BASS_ChannelStop_t = BOOL(WINAPI*)(DWORD);
 using BASS_ChannelIsActive_t = DWORD(WINAPI*)(DWORD);
 using BASS_ChannelGetPosition_t = unsigned long long(WINAPI*)(DWORD, DWORD);
+using BASS_ChannelGetLength_t = unsigned long long(WINAPI*)(DWORD, DWORD);
 using BASS_ChannelBytes2Seconds_t = double(WINAPI*)(DWORD,
     unsigned long long);
 using BASS_ChannelSeconds2Bytes_t = unsigned long long(WINAPI*)(DWORD, double);
@@ -72,6 +77,7 @@ struct BassApi {
     BASS_ChannelStop_t stop{};
     BASS_ChannelIsActive_t active{};
     BASS_ChannelGetPosition_t position{};
+    BASS_ChannelGetLength_t length{};
     BASS_ChannelBytes2Seconds_t bytes_to_seconds{};
     BASS_ChannelSeconds2Bytes_t seconds_to_bytes{};
     BASS_ChannelSetPosition_t set_position{};
@@ -98,6 +104,7 @@ struct BassApi {
         BASS_LOAD(stop, "BASS_ChannelStop");
         BASS_LOAD(active, "BASS_ChannelIsActive");
         BASS_LOAD(position, "BASS_ChannelGetPosition");
+        BASS_LOAD(length, "BASS_ChannelGetLength");
         BASS_LOAD(bytes_to_seconds, "BASS_ChannelBytes2Seconds");
         BASS_LOAD(seconds_to_bytes, "BASS_ChannelSeconds2Bytes");
         BASS_LOAD(set_position, "BASS_ChannelSetPosition");
@@ -334,11 +341,31 @@ bool ensure_group_audio_directory(const std::filesystem::path& data_dir,
     return true;
 }
 
-// 使用 Windows 宽字符路径枚举外部音频，并输出严格 UTF-8 清单；只由音频工作线程调用。
-void write_utf8_audio_catalog(const std::filesystem::path& data_dir,
+struct CatalogFile {
+    std::string file;
+    std::uint64_t duration_ms{};
+};
+
+// 以解码流读取媒体总长度；仅由音频工作线程调用，临时 BASS stream 在函数内释放。
+std::uint64_t read_audio_duration_ms(BassApi& bass,
+    const std::filesystem::path& path) {
+    const DWORD stream = bass.create_stream(FALSE, path.c_str(), 0, 0,
+        BASS_UNICODE | BASS_STREAM_DECODE);
+    if (!stream) return 0;
+    const auto bytes = bass.length(stream, BASS_POS_BYTE);
+    const auto seconds = bytes == static_cast<unsigned long long>(-1)
+        ? 0.0 : bass.bytes_to_seconds(stream, bytes);
+    bass.free_stream(stream);
+    if (!std::isfinite(seconds) || seconds <= 0.0) return 0;
+    return static_cast<std::uint64_t>(std::llround(seconds * 1000.0));
+}
+
+// 使用 Windows 宽字符路径枚举外部音频并输出严格 UTF-8 清单；时长探测和 BASS 资源只属于音频工作线程。
+void write_utf8_audio_catalog(BassApi& bass,
+    const std::filesystem::path& data_dir,
     const std::filesystem::path& output_path) {
     const auto root = data_dir / L"VoiceController";
-    std::vector<std::string> files;
+    std::vector<CatalogFile> files;
     std::error_code ec;
     if (std::filesystem::is_directory(root, ec)) {
         auto iterator = std::filesystem::recursive_directory_iterator(root,
@@ -354,16 +381,20 @@ void write_utf8_audio_catalog(const std::filesystem::path& data_dir,
                     const auto relative = entry.path().lexically_relative(data_dir);
                     auto path = wide_to_utf8(relative.wstring());
                     if (!path.empty() && path.find_first_of("\t\r\n") == std::string::npos)
-                        files.push_back(std::move(path));
+                        files.push_back({std::move(path),
+                            read_audio_duration_ms(bass, entry.path())});
                 }
             }
             iterator.increment(ec);
         }
     }
-    std::sort(files.begin(), files.end());
+    std::sort(files.begin(), files.end(), [](const auto& left, const auto& right) {
+        return left.file < right.file;
+    });
     std::ostringstream output;
-    output << "REFAudioCatalog\t1\n";
-    for (const auto& file : files) output << file << '\n';
+    output << "REFAudioCatalog\t2\n";
+    for (const auto& file : files)
+        output << file.file << '\t' << file.duration_ms << '\n';
     output << "END\t" << files.size() << '\n';
     write_text_atomic(output_path, output.str());
 }
@@ -382,7 +413,8 @@ bool load_channel(BassApi& bass, const std::filesystem::path& data_dir,
         return false;
     }
     const auto path = data_dir / relative_path;
-    const DWORD flags = BASS_UNICODE |
+    // 允许 VoiceController 在受限范围内对偏小的外部素材施加数字增益。
+    const DWORD flags = BASS_UNICODE | BASS_SAMPLE_OVER_VOL |
         (spatial ? (BASS_SAMPLE_3D | BASS_SAMPLE_MONO) : 0);
     channel.stream = bass.create_stream(FALSE, path.c_str(), 0, 0, flags);
     if (!channel.stream) {
@@ -391,7 +423,7 @@ bool load_channel(BassApi& bass, const std::filesystem::path& data_dir,
     }
     if (!bass.get_attribute(channel.stream, BASS_ATTRIB_FREQ,
         &channel.base_frequency)) channel.base_frequency = 0.0f;
-    channel.volume = clamp(volume, 0.0f, 1.0f);
+    channel.volume = clamp(volume, 0.0f, MAX_VOLUME);
     channel.speed = std::max(0.1f, speed);
     channel.max_duration = std::max(0.0, max_duration);
     channel.spatial = spatial;
@@ -462,8 +494,6 @@ void run_audio_worker() {
     DeleteFileW(utf8_command_path.c_str());
     write_text(backend_path,
         "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1\tspatial_batch=1");
-    write_utf8_audio_catalog(data_dir, catalog_path);
-
     BassApi bass;
     if (!bass.load(base_dir / L"REFAudio_BASS.dll")) {
         write_status(status_path, "error", "bass_dll_load");
@@ -476,6 +506,7 @@ void run_audio_worker() {
         CloseHandle(mutex);
         return;
     }
+    write_utf8_audio_catalog(bass, data_dir, catalog_path);
 
     std::map<std::uint32_t, AudioChannel> channels;
     std::string last_command;
@@ -616,7 +647,8 @@ void run_audio_worker() {
                                     std::max(0.0f, parse_float(parts[value_index]))),
                                 BASS_POS_BYTE);
                         } else if (action == "volume" && parts.size() > value_index) {
-                            channel.volume = clamp(parse_float(parts[value_index]), 0.0f, 1.0f);
+                            channel.volume = clamp(
+                                parse_float(parts[value_index]), 0.0f, MAX_VOLUME);
                             bass.set_attribute(channel.stream, BASS_ATTRIB_VOL, channel.volume);
                         } else if (action == "speed" && parts.size() > value_index) {
                             channel.speed = std::max(0.1f, parse_float(parts[value_index]));
@@ -671,7 +703,7 @@ void run_audio_worker() {
         write_channels_status(bass, channels, channels_path);
         const auto current_time = std::chrono::steady_clock::now();
         if (current_time >= next_catalog_scan) {
-            write_utf8_audio_catalog(data_dir, catalog_path);
+            write_utf8_audio_catalog(bass, data_dir, catalog_path);
             next_catalog_scan = current_time + std::chrono::seconds(10);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));

@@ -141,14 +141,23 @@ local function find_rule(config, group_id, rule_id)
     return nil, nil
 end
 
-local function build_catalog_index(snapshot)
-    local index = {}
-    if type(snapshot) ~= "table" or type(snapshot.files) ~= "table" then return index end
+local function build_catalog_indexes(snapshot)
+    local index, durations = {}, {}
+    if type(snapshot) ~= "table" or type(snapshot.files) ~= "table" then
+        return index, durations
+    end
     for _, entry in ipairs(snapshot.files) do
         local file = type(entry) == "table" and normalize_file(entry.file) or nil
-        if file then index[string.lower(file)] = file end
+        if file then
+            local key = string.lower(file)
+            index[key] = file
+            local duration_ms = tonumber(entry.durationMs)
+            if duration_ms and duration_ms > 0 then
+                durations[key] = math.min(3600000, math.floor(duration_ms + 0.5))
+            end
+        end
     end
-    return index
+    return index, durations
 end
 
 local function collect_identity_errors(config, errors)
@@ -394,13 +403,14 @@ function Manager.new(config, catalog_snapshot, group_folders, present_folders)
         and type(catalog_snapshot.files) == "table"
         and type(catalog_snapshot.errors) == "table"
         and #catalog_snapshot.errors == 0
-    local catalog_index = build_catalog_index(catalog_snapshot)
+    local catalog_index, catalog_duration_index = build_catalog_indexes(catalog_snapshot)
     -- 旧配置可能引用已被移除的音频；这不应阻断整个分组编辑器。新增/修改候选仍在事务 API 中严格校验。
     local valid, errors = validate(copied, catalog_index, false)
     if not valid then return nil, errors end
     return {
         config = copied,
         catalog_index = catalog_index,
+        catalog_duration_index = catalog_duration_index,
         catalog_ready = catalog_ready,
         revision = 0,
         dirty = false,
@@ -414,7 +424,7 @@ end
 
 -- 替换目录快照；已有配置出现失效候选时拒绝切换，避免 UI 在无提示时保存坏路径。
 function Manager.set_catalog(manager, snapshot)
-    local next_index = build_catalog_index(snapshot)
+    local next_index, next_duration_index = build_catalog_indexes(snapshot)
     local ready = type(snapshot) == "table"
         and type(snapshot.files) == "table"
         and type(snapshot.errors) == "table"
@@ -423,6 +433,7 @@ function Manager.set_catalog(manager, snapshot)
     local valid, errors = validate(manager.config, next_index, false)
     if not valid then return false, errors end
     manager.catalog_index = next_index
+    manager.catalog_duration_index = next_duration_index
     manager.catalog_ready = ready
     return true
 end
@@ -521,8 +532,13 @@ function Manager.add_rule_from_saved_event(manager, group_id, event, file)
         local id = unique_id("event_" .. event_id .. "_" .. trigger_id, used_rule_ids(group))
         group.rules[#group.rules + 1] = {
             id = id, enabled = false, eventId = event_id, triggerId = trigger_id,
-            mode = "observe", cooldownMs = 0, maxConcurrent = 1,
-            candidates = {{file = catalog_file, weight = 1, volume = 1, speed = 1, maxDurationMs = 0}}
+            mode = "replace",
+            replaceStrategy = next_config.replaceStrategy or "skip_original",
+            cooldownMs = 0, maxConcurrent = 1,
+            candidates = {{
+                file = catalog_file, weight = 1, volume = 1, speed = 1,
+                maxDurationMs = manager.catalog_duration_index[string.lower(catalog_file)] or 0
+            }}
         }
         return id
     end)
@@ -545,7 +561,7 @@ function Manager.get_group_audio_directory(manager, group_id)
     return group and group.audioDirectory or nil
 end
 
--- 从自然捕获事件创建禁用规则；默认保持 observe，调用方必须显式启用替换行为。
+-- 从自然捕获事件创建禁用规则；新规则默认替换，仍需调用方显式启用后才进入运行时。
 function Manager.create_rule_from_event(manager, event, options)
     options = options or {}
     if not manager.catalog_ready then return false, {"catalog_not_ready"} end
@@ -580,7 +596,9 @@ function Manager.create_rule_from_event(manager, event, options)
             enabled = options.enabled == true,
             eventId = event_id,
             triggerId = trigger_id,
-            mode = options.mode or "observe",
+            mode = options.mode or "replace",
+            replaceStrategy = options.replace_strategy
+                or next_config.replaceStrategy or "skip_original",
             cooldownMs = options.cooldown_ms or 0,
             maxConcurrent = options.max_concurrent or 1,
             candidates = {{
@@ -588,7 +606,8 @@ function Manager.create_rule_from_event(manager, event, options)
                 weight = options.weight or 1,
                 volume = options.volume or 1,
                 speed = options.speed or 1,
-                maxDurationMs = options.max_duration_ms or 0
+                maxDurationMs = options.max_duration_ms
+                    or manager.catalog_duration_index[string.lower(catalog_file or requested_file)] or 0
             }}
         }
         return rule_id
@@ -616,6 +635,7 @@ function Manager.add_candidate(manager, group_id, rule_id, file, parameters)
             volume = parameters.volume,
             speed = parameters.speed,
             maxDurationMs = parameters.max_duration_ms
+                or manager.catalog_duration_index[string.lower(catalog_file or normalized)] or 0
         }
         return #rule.candidates
     end)

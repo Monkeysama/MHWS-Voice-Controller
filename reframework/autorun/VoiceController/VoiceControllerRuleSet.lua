@@ -4,6 +4,9 @@
 local RuleSet = {}
 
 local MAX_CONCURRENT = 32
+local MAX_VOLUME = 2.0
+-- REFAudio 外部通道目前没有把自然结束回调传回 Lua；未指定最大时长时用短租约释放并发令牌，避免一次播放永久锁死规则。
+local DEFAULT_TOKEN_LEASE_MS = 2000
 
 local function add_error(errors, code)
     errors[#errors + 1] = code
@@ -52,7 +55,7 @@ local function compile_candidate(candidate, defaults, errors, label)
     candidate = type(candidate) == "table" and candidate or {}
     local file = normalize_audio_path(candidate.file)
     local weight = bounded_number(candidate.weight, 1.0, 0.000001, 1000000)
-    local volume = bounded_number(candidate.volume, defaults.volume, 0.0, 1.0)
+    local volume = bounded_number(candidate.volume, defaults.volume, 0.0, MAX_VOLUME)
     local speed = bounded_number(candidate.speed, defaults.speed, 0.1, 8.0)
     local max_duration_ms = bounded_number(
         candidate.maxDurationMs, defaults.max_duration_ms, 0, 3600000)
@@ -150,7 +153,7 @@ function RuleSet.compile(config)
     local defaults = {
         mode = mode,
         replace_strategy = config.replaceStrategy,
-        volume = bounded_number(config.volume, 1.0, 0.0, 1.0) or 1.0,
+        volume = bounded_number(config.volume, 1.0, 0.0, MAX_VOLUME) or 1.0,
         speed = bounded_number(config.speed, 1.0, 0.1, 8.0) or 1.0,
         max_duration_ms = bounded_number(config.maxDurationMs, 0, 0, 3600000) or 0,
         cooldown_ms = bounded_number(config.cooldownMs, 0, 0, 3600000) or 0,
@@ -253,8 +256,8 @@ function RuleSet.acquire(rule, now_ms, random_value)
         id = rule.next_token_id,
         rule = rule,
         candidate = candidate,
-        expires_at = candidate.max_duration_ms > 0
-            and (now_ms + candidate.max_duration_ms) or nil
+        expires_at = now_ms + (candidate.max_duration_ms > 0
+            and candidate.max_duration_ms or DEFAULT_TOKEN_LEASE_MS)
     }
     rule.active_tokens[token.id] = token
     return token, "accepted"

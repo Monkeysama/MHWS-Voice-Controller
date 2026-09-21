@@ -1,10 +1,12 @@
 import {computed, onBeforeUnmount, onMounted, readonly, shallowRef} from 'vue';
+import {useI18n} from 'vue-i18n';
 import {ElMessage, REFF_UI_VERSION} from '@reff/ui';
 import {
   createEmbeddedTransport,
   createReffClient,
   installDevReload,
   installInputFocusReporter,
+  ReffError,
   type ReffSubscription,
 } from '@/reff-sdk';
 import type {ControllerState} from '@/types';
@@ -14,6 +16,7 @@ const CHANGE_EVENT = 'voice-controller.changed';
 
 // 管理 REFF 连接、轮询和写操作；页面状态以服务端快照为唯一事实来源。
 export function useVoiceController() {
+  const {t} = useI18n();
   const client = createReffClient(createEmbeddedTransport());
   const state = shallowRef<ControllerState | null>(null);
   const connected = shallowRef(false);
@@ -26,13 +29,25 @@ export function useVoiceController() {
   let stopInputReporter: (() => void) | undefined;
   let requestInFlight = false;
 
+  function formatError(reason: unknown) {
+    if (!(reason instanceof ReffError)) return String(reason);
+    const keys: Record<string, string> = {
+      HOST_DISCONNECTED: 'errors.hostDisconnected',
+      NOT_READY: 'errors.notReady',
+      INVALID_ARGUMENT: 'errors.invalidArgument',
+      INVALID_MESSAGE: 'errors.invalidMessage',
+      TRANSPORT_ERROR: 'errors.transport',
+    };
+    return keys[reason.code] ? t(keys[reason.code]) : String(reason);
+  }
+
   const groups = computed(() => (state.value?.config?.groups ?? []).map(group => ({
     ...group,
     rules: Array.isArray(group.rules) ? group.rules : [],
   })));
   const events = computed(() => state.value?.events ?? []);
   const savedEvents = computed(() => state.value?.savedEvents ?? []);
-  const catalogFiles = computed(() => state.value?.catalog?.files.map(item => item.file) ?? []);
+  const catalogEntries = computed(() => state.value?.catalog?.files ?? []);
   // 分组文件夹元数据与占用关系；规则体本身就在 config.groups 里。
   // REFramework 的 JSON 编码会把空 Lua 表写成 null，数组字段统一规范化，
   // 否则模板里的 .length 会直接抛错并让整块列表渲染失败。
@@ -58,7 +73,7 @@ export function useVoiceController() {
       state.value = await client.call<ControllerState>('voice-controller.get-state');
       error.value = '';
     } catch (reason) {
-      error.value = String(reason);
+      error.value = formatError(reason);
       if (!options.silent) ElMessage.error(error.value);
     } finally {
       requestInFlight = false;
@@ -73,7 +88,7 @@ export function useVoiceController() {
       error.value = '';
       return true;
     } catch (reason) {
-      error.value = String(reason);
+      error.value = formatError(reason);
       ElMessage.error(error.value);
       return false;
     } finally {
@@ -83,12 +98,17 @@ export function useVoiceController() {
 
   async function save() {
     const saved = await mutate('voice-controller.save');
-    if (saved) ElMessage.success('配置已保存');
+    if (saved) ElMessage({message: t('saveBar.saved'), customClass: 'vc-theme-message'});
+  }
+
+  async function reloadConfig() {
+    const reloaded = await mutate('voice-controller.reload-config');
+    if (reloaded) ElMessage({message: t('saveBar.reloaded'), customClass: 'vc-theme-message'});
   }
 
   async function testCandidate(params: Record<string, unknown>) {
     const queued = await mutate('voice-controller.test-candidate', params);
-    if (queued) ElMessage.success('试听请求已排队');
+    if (queued) ElMessage.success(t('saveBar.previewQueued'));
   }
 
   onMounted(async () => {
@@ -97,7 +117,7 @@ export function useVoiceController() {
     try {
       await client.ready();
       const identity = await client.call<{pluginId: string | null}>('ui.identity');
-      if (identity.pluginId !== PLUGIN_ID) throw new Error('REFF 插件身份不匹配');
+      if (identity.pluginId !== PLUGIN_ID) throw new Error(t('errors.identityMismatch'));
       subscription = await client.subscribe<ControllerState>(CHANGE_EVENT, value => {
         state.value = value;
       });
@@ -111,7 +131,7 @@ export function useVoiceController() {
         styled: true,
       }, '*');
     } catch (reason) {
-      error.value = String(reason);
+      error.value = formatError(reason);
       loading.value = false;
       ElMessage.error(error.value);
     }
@@ -134,7 +154,7 @@ export function useVoiceController() {
     groups,
     events,
     savedEvents,
-    catalogFiles,
+    catalogEntries,
     configuredKeys,
     groupFolders,
     conflicts,
@@ -142,9 +162,12 @@ export function useVoiceController() {
     unwritableFolders,
     refresh,
     save,
+    reloadConfig,
     saveEvent: (params: Record<string, unknown>) => mutate('voice-controller.save-event', params),
     removeSavedEvent: (params: Record<string, unknown>) => mutate('voice-controller.remove-saved-event', params),
+    updateSavedEventNote: (params: Record<string, unknown>) => mutate('voice-controller.update-saved-event-note', params),
     playEvent: (params: Record<string, unknown>) => mutate('voice-controller.play-event', params),
+    setRecentLock: (params: Record<string, unknown>) => mutate('voice-controller.set-recent-lock', params),
     addGroup: (params: Record<string, unknown>) => mutate('voice-controller.add-group', params),
     updateGroup: (params: Record<string, unknown>) => mutate('voice-controller.update-group', params),
     updateBlockedSources: (params: Record<string, unknown>) => mutate('voice-controller.update-blocked-sources', params),

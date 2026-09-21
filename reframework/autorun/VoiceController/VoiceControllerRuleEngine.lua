@@ -3,6 +3,8 @@
 
 local RuleEngine = {}
 
+local MAX_VOLUME = 2.0
+
 local function add_error(errors, code)
     errors[#errors + 1] = code
 end
@@ -56,7 +58,7 @@ function RuleEngine.compile(config)
     local trigger_id = normalize_uint(config.triggerId)
     local mode = config.mode or "observe"
     local file = normalize_audio_path(config.file)
-    local volume = bounded_number(config.volume, 1.0, 0.0, 1.0)
+    local volume = bounded_number(config.volume, 1.0, 0.0, MAX_VOLUME)
     local speed = bounded_number(config.speed, 1.0, 0.1, 8.0)
     local max_duration_ms = bounded_number(config.maxDurationMs, 0, 0, 3600000)
     local cooldown_ms = bounded_number(config.cooldownMs, 0, 0, 3600000)

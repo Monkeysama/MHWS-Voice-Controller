@@ -66,11 +66,13 @@ export interface AudioEvent {
   playbackStatus?: PlaybackStatus;
   playbackError?: string;
   durationMs?: number;
+  note?: string;
   savedAt?: string;
 }
 
 export interface CatalogEntry {
   file: string;
+  durationMs?: number;
   name?: string;
   extension?: string;
   groupDirectory?: string;

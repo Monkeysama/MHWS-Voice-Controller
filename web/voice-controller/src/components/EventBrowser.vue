@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import {computed, shallowRef, watch} from 'vue';
-import {CollectionTag, Search, VideoPlay} from '@element-plus/icons-vue';
+import {computed, onBeforeUnmount, shallowRef, watch} from 'vue';
+import {useI18n} from 'vue-i18n';
+import {CollectionTag, Lock, Search, Unlock, VideoPlay} from '@element-plus/icons-vue';
 import type {AudioEvent} from '@/types';
 import PlaybackStatus from '@/components/PlaybackStatus.vue';
 
@@ -8,18 +9,21 @@ const props = defineProps<{events: AudioEvent[]; savedKeys: Set<string>; busy: b
 const emit = defineEmits<{
   save: [payload: {stableKey: string}];
   play: [payload: {stableKey: string}];
+  setLock: [payload: {locked: boolean; category: string; query: string}];
 }>();
 const query = shallowRef('');
 const category = shallowRef('all');
-const categoryStartSequence = shallowRef(0);
-const categoryBaselineCounts = shallowRef<Record<string, number>>({});
-const categoryLabels: Record<string, string> = {player: '玩家', npc: 'NPC', otomo: '坐骑', weapon: '武器', unknown: '未分类'};
-function formatDuration(durationMs?: number) { return durationMs ? `${(durationMs / 1000).toFixed(2)} 秒` : '时长待获取'; }
-// 筛选切换后，旧事件仍可能在后端分类队列中被更新；显示时扣除切换前基线，避免触发次数跨筛选累加。
-function displayTriggerCount(event: AudioEvent) {
-  const current = Number(event.triggerCount ?? 1);
-  const baseline = categoryBaselineCounts.value[event.stableKey] ?? 0;
-  return Math.max(1, current - baseline);
+const locked = shallowRef(false);
+let lockUpdateTimer: number | undefined;
+const {t} = useI18n();
+const categoryLabels = computed<Record<string, string>>(() => ({
+  player: t('common.player'), npc: t('common.npc'), otomo: t('common.companion'),
+  weapon: t('common.weapon'), unknown: t('common.uncategorized'),
+}));
+function formatDuration(durationMs?: number) {
+  return durationMs
+    ? t('common.seconds', {value: (durationMs / 1000).toFixed(2)})
+    : t('common.durationPending');
 }
 // REFF 宿主切换标签页后可能重新接管 wheel 事件；显式把增量交给近期事件容器，避免滚动上下文漂移。
 function handleListWheel(event: WheelEvent) {
@@ -29,17 +33,37 @@ function handleListWheel(event: WheelEvent) {
   event.stopPropagation();
   list.scrollTop += event.deltaY;
 }
+function emitLockState() {
+  emit('setLock', {locked: locked.value, category: category.value, query: query.value.trim()});
+}
+function scheduleLockedFilterUpdate() {
+  if (!locked.value) return;
+  if (lockUpdateTimer !== undefined) window.clearTimeout(lockUpdateTimer);
+  lockUpdateTimer = window.setTimeout(() => {
+    lockUpdateTimer = undefined;
+    emitLockState();
+  }, 250);
+}
+function toggleLock() {
+  locked.value = !locked.value;
+  if (lockUpdateTimer !== undefined) window.clearTimeout(lockUpdateTimer);
+  lockUpdateTimer = undefined;
+  emitLockState();
+}
 watch(category, () => {
-  categoryStartSequence.value = Math.max(0, ...props.events.map(event => event.sequence ?? 0));
-  const baseline: Record<string, number> = {};
-  for (const event of props.events) baseline[event.stableKey] = Number(event.triggerCount ?? 1);
-  categoryBaselineCounts.value = baseline;
+  emitLockState();
+}, {flush: 'sync'});
+watch(query, () => {
+  if (!locked.value) return;
+  scheduleLockedFilterUpdate();
+}, {flush: 'sync'});
+onBeforeUnmount(() => {
+  if (lockUpdateTimer !== undefined) window.clearTimeout(lockUpdateTimer);
 });
 const visibleEvents = computed(() => {
   const needle = query.value.trim().toLowerCase();
   return [...props.events].reverse().filter(event => {
     if (category.value !== 'all' && event.category !== category.value) return false;
-    if ((event.sequence ?? 0) <= categoryStartSequence.value) return false;
     return !needle || [event.stableKey, event.sourcePath, event.sourceObject, event.origin]
       .some(value => String(value ?? '').toLowerCase().includes(needle));
   }).slice(0, 120);
@@ -49,18 +73,31 @@ const visibleEvents = computed(() => {
 <template>
   <section class="event-browser">
     <header class="section-heading">
-      <div><span class="eyebrow">自然游戏流程</span><h2>近期音频事件</h2></div>
-      <el-tag effect="plain">{{ visibleEvents.length }} 条</el-tag>
+      <div><span class="eyebrow">{{ t('recent.eyebrow') }}</span><h2>{{ t('recent.title') }}</h2></div>
+      <el-tag effect="plain">{{ t('common.entries', {count: visibleEvents.length}) }}</el-tag>
     </header>
     <div class="toolbar">
-      <el-input v-model="query" :prefix-icon="Search" clearable placeholder="事件键、来源或资源路径" />
-      <el-select v-model="category" aria-label="事件类别">
-        <el-option label="全部类别" value="all" />
-        <el-option label="玩家" value="player" />
-        <el-option label="NPC" value="npc" />
-        <el-option label="坐骑" value="otomo" />
-        <el-option label="武器" value="weapon" />
-        <el-option label="未分类" value="unknown" />
+      <div class="search-lock">
+        <el-input v-model="query" :prefix-icon="Search" clearable :placeholder="t('recent.search')" />
+        <el-tooltip :content="locked ? t('recent.unlock') : t('recent.lock')" placement="top">
+          <el-button
+            class="lock-button"
+            :class="{active: locked}"
+            :icon="locked ? Lock : Unlock"
+            :disabled="busy"
+            :aria-pressed="locked"
+            :aria-label="locked ? t('recent.unlockAria') : t('recent.lockAria')"
+            @click="toggleLock"
+          />
+        </el-tooltip>
+      </div>
+      <el-select v-model="category" :aria-label="t('recent.categoryAria')">
+        <el-option :label="t('common.allCategories')" value="all" />
+        <el-option :label="t('common.player')" value="player" />
+        <el-option :label="t('common.npc')" value="npc" />
+        <el-option :label="t('common.companion')" value="otomo" />
+        <el-option :label="t('common.weapon')" value="weapon" />
+        <el-option :label="t('common.uncategorized')" value="unknown" />
       </el-select>
     </div>
     <div class="event-list" @wheel="handleListWheel">
@@ -69,21 +106,21 @@ const visibleEvents = computed(() => {
           <div class="event-key">
             <code>{{ event.stableKey }}</code>
             <el-tag size="small" effect="plain" disable-transitions>{{ categoryLabels[event.category || 'unknown'] || event.category }}</el-tag>
-            <el-tag v-if="displayTriggerCount(event) > 1" size="small" type="warning" effect="plain" disable-transitions>触发 {{ displayTriggerCount(event) }} 次</el-tag>
+            <el-tag v-if="Number(event.triggerCount ?? 1) > 1" size="small" type="warning" effect="plain" disable-transitions>{{ t('recent.triggered', {count: event.triggerCount}) }}</el-tag>
           </div>
-          <div class="event-source">{{ event.sourcePath || event.sourceObject || '未知来源' }}</div>
-          <div class="event-meta">最近 #{{ event.sequence }} · {{ event.origin || 'unknown' }} · {{ formatDuration(event.durationMs) }}</div>
+          <div class="event-source">{{ event.sourcePath || event.sourceObject || t('common.unknownSource') }}</div>
+          <div class="event-meta">{{ t('recent.latest', {sequence: event.sequence}) }} · {{ event.origin || 'unknown' }} · {{ formatDuration(event.durationMs) }}</div>
         </div>
         <div class="event-actions">
           <PlaybackStatus :status="event.playbackStatus" :error="event.playbackError" />
-          <el-tooltip :content="event.replayable ? '播放游戏内音频' : '当前会话无法解析此音频'">
-            <el-button class="play-button" :icon="VideoPlay" :disabled="busy || !event.replayable || event.playbackStatus === 'trying'" aria-label="播放游戏内音频" @click="emit('play', {stableKey: event.stableKey})" />
+          <el-tooltip :content="event.replayable ? t('recent.play') : t('recent.unavailable')">
+            <el-button class="play-button" :icon="VideoPlay" :disabled="busy || !event.replayable || event.playbackStatus === 'trying'" :aria-label="t('recent.play')" @click="emit('play', {stableKey: event.stableKey})" />
           </el-tooltip>
-          <el-tag v-if="savedKeys.has(event.stableKey)" class="saved-tag" effect="plain">已收藏</el-tag>
-          <el-button v-else :icon="CollectionTag" :disabled="busy" @click="emit('save', {stableKey: event.stableKey})">收藏</el-button>
+          <el-tag v-if="savedKeys.has(event.stableKey)" class="saved-tag" effect="plain">{{ t('recent.saved') }}</el-tag>
+          <el-button v-else :icon="CollectionTag" :disabled="busy" @click="emit('save', {stableKey: event.stableKey})">{{ t('recent.save') }}</el-button>
         </div>
       </article>
-      <div v-if="visibleEvents.length === 0" class="empty-state">没有匹配的事件</div>
+      <div v-if="visibleEvents.length === 0" class="empty-state">{{ t('recent.empty') }}</div>
     </div>
   </section>
 </template>
@@ -96,6 +133,9 @@ const visibleEvents = computed(() => {
 .section-heading h2 { margin: 3px 0 0; font-size: 17px; letter-spacing: 0; }
 .eyebrow, .event-source, .event-meta { color: var(--vc-muted); font-size: 12px; }
 .toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 150px; gap: 8px; margin-bottom: 12px; }
+.search-lock { display: grid; grid-template-columns: minmax(0, 1fr) 32px; align-items: center; gap: 8px; }
+.lock-button { width: 32px; min-width: 32px; height: 32px; padding: 0; }
+.lock-button.active { color: var(--vc-accent-strong); border-color: color-mix(in srgb, var(--vc-accent) 62%, var(--vc-border)); background: var(--vc-accent-soft); }
 .event-list {
   min-height: 0;
   flex: 1;

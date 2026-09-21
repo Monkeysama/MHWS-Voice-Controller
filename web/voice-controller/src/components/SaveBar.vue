@@ -1,20 +1,24 @@
 <script setup lang="ts">
 import {DocumentChecked, Refresh} from '@element-plus/icons-vue';
+import {useI18n} from 'vue-i18n';
 
 defineProps<{dirty: boolean; busy: boolean}>();
-const emit = defineEmits<{save: []; refresh: []}>();
+const emit = defineEmits<{save: []; reload: []}>();
+const {t} = useI18n();
 </script>
 
 <template>
   <footer class="save-bar">
     <div class="save-state">
       <i :class="{dirty}" />
-      <span>{{ dirty ? '有未保存修改' : '配置已同步' }}</span>
+      <span>{{ dirty ? t('saveBar.dirty') : t('saveBar.synced') }}</span>
     </div>
     <div class="actions">
-      <el-button :icon="Refresh" :disabled="busy" @click="emit('refresh')">刷新</el-button>
-      <el-button type="primary" :icon="DocumentChecked" :loading="busy" :disabled="!dirty" @click="emit('save')">
-        保存配置
+      <el-tooltip :content="t('saveBar.reloadHint')" placement="top">
+        <el-button :icon="Refresh" :disabled="busy" @click="emit('reload')">{{ t('saveBar.reload') }}</el-button>
+      </el-tooltip>
+      <el-button class="save-button" type="primary" :icon="DocumentChecked" :loading="busy" :disabled="busy || !dirty" @click="emit('save')">
+        {{ t('saveBar.save') }}
       </el-button>
     </div>
   </footer>
@@ -26,4 +30,5 @@ const emit = defineEmits<{save: []; refresh: []}>();
 .save-state { color: var(--vc-muted); font-size: 13px; }
 .save-state i { width: 8px; height: 8px; border-radius: 50%; background: #5eac87; }
 .save-state i.dirty { background: #e2a93b; }
+.save-button.is-disabled { color: var(--vc-muted); border-color: var(--vc-border); background: var(--vc-bg-soft); opacity: .62; }
 </style>

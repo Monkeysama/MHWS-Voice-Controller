@@ -1,16 +1,13 @@
 <script setup lang="ts">
 import {computed} from 'vue';
+import {useI18n} from 'vue-i18n';
 import type {PlaybackStatus} from '@/types';
 
 const props = defineProps<{status?: PlaybackStatus; error?: string}>();
-const labels: Record<PlaybackStatus, string> = {
-  trying: '尝试播放中',
-  success: '播放成功',
-  failed: '播放失败',
-};
-const label = computed(() => props.status ? labels[props.status] : '');
+const {t} = useI18n();
+const label = computed(() => props.status ? t(`playback.${props.status}`) : '');
 const tooltip = computed(() => props.status === 'failed' && props.error
-  ? `播放失败：${props.error}`
+  ? t('playback.failedDetail', {error: props.error})
   : label.value);
 </script>
 

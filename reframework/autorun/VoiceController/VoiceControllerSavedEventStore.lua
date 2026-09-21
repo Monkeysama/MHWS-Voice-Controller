@@ -15,6 +15,12 @@ local function normalize_uint(value)
     return string.match(text, "^%d+$") and text or nil
 end
 
+local function normalize_note(value)
+    if value == nil then return nil end
+    local text = string.gsub(string.gsub(tostring(value), "^%s+", ""), "%s+$", "")
+    return text ~= "" and text or nil
+end
+
 local function normalize_event(event)
     if type(event) ~= "table" then return nil, "invalid_event" end
     local event_id = normalize_uint(event.eventId)
@@ -34,6 +40,7 @@ local function normalize_event(event)
         container = event.container,
         offsetJointHash = tonumber(event.offsetJointHash) or 0,
         origin = event.origin,
+        note = normalize_note(event.note),
         savedAt = event.savedAt,
         lastCapturedAt = event.lastCapturedAt or event.capturedAt,
         durationMs = tonumber(event.durationMs)
@@ -148,7 +155,29 @@ function Store.add(store, event, saved_at)
     return true, normalized.stableKey
 end
 
--- 删除收藏记录；规则引用不会在此级联删除，调用方应先执行关联检查。
+-- 更新收藏备注；空字符串表示清除，备注只属于保存列表，不写入或修改分组规则。
+function Store.update_note(store, stable_key, note)
+    if type(note) ~= "string" then return false, "invalid_note" end
+    local normalized = normalize_note(note)
+    -- UI 限制为 64 个字符；后端按 UTF-8 字节保留余量并拒绝异常大的直接调用。
+    if normalized and #normalized > 256 then return false, "note_too_long" end
+    local next_document = normalize_document(store.document)
+    local updated = false
+    for _, event in ipairs(next_document.events) do
+        if event.stableKey == stable_key then
+            event.note = normalized
+            updated = true
+            break
+        end
+    end
+    if not updated then return false, "saved_event_not_found" end
+    local saved, err = persist(store, next_document)
+    if not saved then return false, err end
+    store.document = next_document
+    return true
+end
+
+-- 删除收藏记录；收藏与分组规则彼此独立，删除不会级联修改分组配置。
 function Store.remove(store, stable_key)
     local next_document = normalize_document(store.document)
     local removed = false

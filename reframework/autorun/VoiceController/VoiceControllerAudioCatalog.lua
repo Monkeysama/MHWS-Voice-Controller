@@ -34,7 +34,7 @@ local function add_error(errors, pattern, code, detail)
 end
 
 -- 将 fs.glob 返回值规范化为相对于 reframework/data 的规则路径；拒绝越界和非音频文件。
-local function normalize_path(value)
+local function normalize_path(value, duration_ms)
     if type(value) ~= "string" or value == "" then return nil, "invalid_path" end
     if not is_valid_utf8(value) then return nil, "invalid_encoding" end
     if string.find(value, "[%z\1-\31]") then return nil, "invalid_path" end
@@ -66,7 +66,7 @@ local function normalize_path(value)
     relative = table.concat(segments, "\\")
     local directory = #segments > 1
         and table.concat(segments, "\\", 1, #segments - 1) or ""
-    return {
+    local entry = {
         file = "VoiceController\\" .. relative,
         relativePath = relative,
         name = segments[#segments],
@@ -74,6 +74,11 @@ local function normalize_path(value)
         directory = directory,
         groupDirectory = #segments > 1 and segments[1] or nil
     }
+    duration_ms = tonumber(duration_ms)
+    if duration_ms and duration_ms > 0 then
+        entry.durationMs = math.floor(duration_ms + 0.5)
+    end
+    return entry
 end
 
 -- 解析 REFAudio 工作线程生成的 UTF-8 清单；尾标数量不匹配时拒绝半写文件。
@@ -86,7 +91,8 @@ function Catalog.parse_native_manifest(content)
     for line in string.gmatch(content, "[^\r\n]+") do
         lines[#lines + 1] = line
     end
-    if lines[1] ~= "REFAudioCatalog\t1" then
+    local version = tonumber(string.match(lines[1] or "", "^REFAudioCatalog\t(%d+)$"))
+    if version ~= 1 and version ~= 2 then
         return nil, "native_catalog_invalid_header"
     end
     local expected = tonumber(string.match(lines[#lines] or "", "^END\t(%d+)$"))
@@ -94,7 +100,15 @@ function Catalog.parse_native_manifest(content)
         return nil, "native_catalog_incomplete"
     end
     local paths = {}
-    for index = 2, #lines - 1 do paths[#paths + 1] = lines[index] end
+    for index = 2, #lines - 1 do
+        if version == 1 then
+            paths[#paths + 1] = lines[index]
+        else
+            local path, duration_ms = string.match(lines[index], "^(.-)\t(%d+)$")
+            if not path then return nil, "native_catalog_invalid_entry" end
+            paths[#paths + 1] = {path = path, durationMs = tonumber(duration_ms)}
+        end
+    end
     return paths
 end
 
@@ -122,9 +136,11 @@ function Catalog.scan(glob_fn, captured_at, patterns)
             elseif type(paths) ~= "table" then
                 add_error(errors, pattern, "glob_invalid_result", type(paths))
             else
-                for _, path in ipairs(paths) do
+                for _, raw_entry in ipairs(paths) do
                     stats.returned = stats.returned + 1
-                    local entry, reason = normalize_path(path)
+                    local path = type(raw_entry) == "table" and raw_entry.path or raw_entry
+                    local duration_ms = type(raw_entry) == "table" and raw_entry.durationMs or nil
+                    local entry, reason = normalize_path(path, duration_ms)
                     if entry then
                         local key = string.lower(entry.file)
                         if seen[key] then

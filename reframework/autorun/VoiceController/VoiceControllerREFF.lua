@@ -88,6 +88,14 @@ function Service.register(api, dependencies)
             assert(removed, mutation_error(err))
             return changed()
         end,
+        ["voice-controller.update-saved-event-note"] = function(params)
+            params = params or {}
+            assert(type(params.note) == "string", "note is required")
+            local updated, err = api.update_saved_event_note(
+                require_string(params, "stableKey"), params.note)
+            assert(updated, mutation_error(err))
+            return changed()
+        end,
         ["voice-controller.play-event"] = function(params)
             local queued, err = api.play_event(require_string(params or {}, "stableKey"))
             -- 描述符可能在网页轮询之间自然过期；此类试听失败不应让 REFF 请求变成 HandlerError。
@@ -95,6 +103,16 @@ function Service.register(api, dependencies)
                 assert(queued, mutation_error(err))
             end
             return snapshot()
+        end,
+        ["voice-controller.set-recent-lock"] = function(params)
+            params = params or {}
+            local updated, err = api.set_recent_lock({
+                locked = params.locked == true,
+                category = tostring(params.category or "all"),
+                query = tostring(params.query or "")
+            })
+            assert(updated, mutation_error(err))
+            return changed()
         end,
         ["voice-controller.add-group"] = function(params)
             local manager = get_manager()
@@ -173,6 +191,11 @@ function Service.register(api, dependencies)
                 assert(tonumber(params.candidateIndex), "candidateIndex is required"))
             assert(queued, mutation_error(err))
             return snapshot()
+        end,
+        ["voice-controller.reload-config"] = function()
+            local reloaded, err = api.reload_config()
+            assert(reloaded, mutation_error(err))
+            return changed()
         end,
         ["voice-controller.save"] = function()
             local manager = get_manager()
