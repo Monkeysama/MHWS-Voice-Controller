@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Validate tag
         shell: pwsh
@@ -26,15 +26,13 @@ jobs:
           }
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '24'
-          cache: 'pnpm'
-          cache-dependency-path: web/voice-controller/pnpm-lock.yaml
 
-      - name: Enable pnpm
+      - name: Install pnpm
         shell: pwsh
-        run: corepack enable
+        run: npm install --global pnpm@11.19.0
 
       - name: Install UI dependencies
         working-directory: web/voice-controller
