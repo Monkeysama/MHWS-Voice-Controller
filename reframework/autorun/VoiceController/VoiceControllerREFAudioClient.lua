@@ -101,7 +101,7 @@ end
 
 -- 计算线性距离衰减；不改变规则音量上限，超出最大距离时静音。
 local function apply_distance_attenuation(spec)
-    local volume = tonumber(spec.volume) or 1.0
+    local volume = tonumber(spec.volume) or 1.5
     if spec.distance_enabled ~= true then return volume end
     local sx, sy, sz = read_position(spec.source_object)
     local lx, ly, lz = read_position(spec.listener_object)
@@ -314,7 +314,7 @@ function Client.tick(client, now)
         if spatial then
             fields = {
                 client.session_id, tostring(client.command_id), "load3d", tostring(channel_id),
-                clean_field(spec.file), clean_field(spec.volume or 1), clean_field(spec.speed or 1),
+                clean_field(spec.file), clean_field(spec.volume or 1.5), clean_field(spec.speed or 1),
                 clean_field((spec.max_duration_ms or 0) / 1000),
                 clean_field(spatial.source[1]), clean_field(spatial.source[2]), clean_field(spatial.source[3]),
                 clean_field(spec.reference_distance or DISTANCE_REFERENCE),
@@ -335,7 +335,7 @@ function Client.tick(client, now)
     elseif action == "volume" then
         fields = {
             client.session_id, tostring(client.command_id), action, tostring(channel_id),
-            clean_field(spec.volume or 1)
+            clean_field(spec.volume or 1.5)
         }
     elseif action == "position3d" then
         local spatial = spec.spatial

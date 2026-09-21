@@ -146,7 +146,8 @@ function Store.add(store, event, saved_at)
     local normalized, err = normalize_event(event)
     if not normalized then return false, err end
     if Store.contains(store, normalized.stableKey) then return false, "already_saved" end
-    normalized.savedAt = saved_at or os.date("!%Y-%m-%dT%H:%M:%SZ")
+    -- 收藏时间属于用户界面数据，使用当前系统本地时区并直接保存统一可读格式。
+    normalized.savedAt = saved_at or os.date("%Y-%m-%d %H:%M:%S")
     local next_document = normalize_document(store.document)
     next_document.events[#next_document.events + 1] = normalized
     local saved, save_error = persist(store, next_document)

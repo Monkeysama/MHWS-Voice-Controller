@@ -33,6 +33,16 @@ function formatDuration(durationMs?: number) {
     ? t('common.seconds', {value: (durationMs / 1000).toFixed(2)})
     : t('common.durationPending');
 }
+// 新记录已是本地时间格式；旧版 UTC ISO 时间在展示时转换到当前系统时区，保持历史数据兼容。
+function formatSavedAt(value?: string) {
+  if (!value) return t('common.unknownTime');
+  const localFormat = value.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/);
+  if (localFormat && !value.endsWith('Z')) return `${localFormat[1]} ${localFormat[2]}`;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  const part = (number: number) => String(number).padStart(2, '0');
+  return `${parsed.getFullYear()}-${part(parsed.getMonth() + 1)}-${part(parsed.getDate())} ${part(parsed.getHours())}:${part(parsed.getMinutes())}:${part(parsed.getSeconds())}`;
+}
 function beginNoteEdit(event: AudioEvent) {
   editingKey.value = event.stableKey;
   noteDraft.value = event.note ?? '';
@@ -85,7 +95,7 @@ function handleListWheel(event: WheelEvent) {
               <el-button class="note-edit" :icon="EditPen" text :aria-label="t('saved.noteEdit')" :disabled="busy" @click="beginNoteEdit(event)" />
             </el-tooltip>
           </div>
-          <span>{{ event.sourcePath || event.sourceObject || t('common.unknownSource') }}</span><small>{{ formatDuration(event.durationMs) }} · {{ t('saved.savedAt', {time: event.savedAt || t('common.unknownTime')}) }}</small>
+          <span>{{ event.sourcePath || event.sourceObject || t('common.unknownSource') }}</span><small>{{ formatDuration(event.durationMs) }} · {{ t('saved.savedAt', {time: formatSavedAt(event.savedAt)}) }}</small>
         </div>
         <div class="actions">
           <PlaybackStatus :status="event.playbackStatus" :error="event.playbackError" />

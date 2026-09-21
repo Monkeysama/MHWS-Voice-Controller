@@ -4,7 +4,8 @@
 local RuleSet = {}
 
 local MAX_CONCURRENT = 32
-local MAX_VOLUME = 2.0
+local DEFAULT_VOLUME = 1.5
+local MAX_VOLUME = 5.0
 -- REFAudio 外部通道目前没有把自然结束回调传回 Lua；未指定最大时长时用短租约释放并发令牌，避免一次播放永久锁死规则。
 local DEFAULT_TOKEN_LEASE_MS = 2000
 
@@ -153,7 +154,7 @@ function RuleSet.compile(config)
     local defaults = {
         mode = mode,
         replace_strategy = config.replaceStrategy,
-        volume = bounded_number(config.volume, 1.0, 0.0, MAX_VOLUME) or 1.0,
+        volume = bounded_number(config.volume, DEFAULT_VOLUME, 0.0, MAX_VOLUME) or DEFAULT_VOLUME,
         speed = bounded_number(config.speed, 1.0, 0.1, 8.0) or 1.0,
         max_duration_ms = bounded_number(config.maxDurationMs, 0, 0, 3600000) or 0,
         cooldown_ms = bounded_number(config.cooldownMs, 0, 0, 3600000) or 0,

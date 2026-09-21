@@ -94,7 +94,14 @@ const setConcurrent = (value: number | undefined) => setInteger('maxConcurrent',
   <details class="rule-card">
     <summary>
       <span class="rule-toggle" aria-hidden="true"><ArrowRight /></span>
-      <span class="rule-state" :class="{enabled: rule.enabled !== false}" />
+      <el-switch
+        class="rule-enabled"
+        :model-value="rule.enabled !== false"
+        :disabled="busy"
+        :aria-label="t('common.enabled')"
+        @click.stop
+        @change="setEnabled"
+      />
       <span class="rule-name">{{ eventNote || rule.id }}</span>
       <code>{{ rule.eventId }}:{{ rule.triggerId }}</code>
       <el-tag size="small" effect="plain">{{ modeLabel(rule.mode) }}</el-tag>
@@ -102,10 +109,6 @@ const setConcurrent = (value: number | undefined) => setInteger('maxConcurrent',
 
     <div class="rule-body">
       <div class="rule-controls">
-        <label class="switch-field">
-          <span>{{ t('common.enabled') }}</span>
-          <el-switch :model-value="rule.enabled !== false" :disabled="busy" @change="setEnabled" />
-        </label>
         <label>
           <span>{{ t('common.mode') }}</span>
           <el-select :model-value="rule.mode || defaultMode" :disabled="busy" @change="setMode">
@@ -161,7 +164,7 @@ const setConcurrent = (value: number | undefined) => setInteger('maxConcurrent',
 <style scoped>
 .rule-card { overflow: hidden; border: 1px solid var(--vc-border); border-radius: 6px; background: var(--vc-surface); transition: border-color 120ms ease, background-color 120ms ease; }
 .rule-card + .rule-card { margin-top: 9px; }
-.rule-card summary { display: grid; min-height: 56px; grid-template-columns: 40px 10px minmax(120px, .7fr) minmax(180px, 1fr) auto; align-items: center; gap: 10px; padding: 7px 10px; cursor: pointer; list-style: none; }
+.rule-card summary { display: grid; min-height: 56px; grid-template-columns: 40px auto minmax(120px, .7fr) minmax(180px, 1fr) auto; align-items: center; gap: 10px; padding: 7px 10px; cursor: pointer; list-style: none; }
 .rule-card summary::-webkit-details-marker { display: none; }
 .rule-card summary:hover, .rule-card summary:focus-visible { background: var(--vc-accent-soft); outline: none; }
 .rule-card:has(> summary:hover), .rule-card:has(> summary:focus-visible) { border-color: var(--vc-accent); }
@@ -169,17 +172,15 @@ const setConcurrent = (value: number | undefined) => setInteger('maxConcurrent',
 .rule-toggle > svg { width: 14px; height: 14px; }
 .rule-card[open] > summary .rule-toggle { transform: rotate(90deg); }
 .rule-card summary:hover .rule-toggle, .rule-card summary:focus-visible .rule-toggle { color: var(--vc-accent-strong); }
-.rule-state { width: 8px; height: 8px; border-radius: 50%; background: #7c8796; }
-.rule-state.enabled { background: #5eac87; }
+.rule-enabled { cursor: default; }
 .rule-name { overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .rule-card code { color: var(--vc-muted); font-size: 12px; }
 .rule-body { padding: 12px; border-top: 1px solid var(--vc-border); }
-.rule-controls { display: grid; grid-template-columns: 90px repeat(4, minmax(125px, 1fr)); gap: 9px; }
+.rule-controls { display: grid; grid-template-columns: repeat(4, minmax(125px, 1fr)); gap: 9px; }
 .rule-controls label > span { display: block; margin-bottom: 5px; color: var(--vc-muted); font-size: 11px; }
 .rule-controls :deep(.el-select), .rule-controls :deep(.el-input-number) { width: 100%; }
-.switch-field { display: flex; flex-direction: column; align-items: flex-start; }
 .candidate-list { display: grid; gap: 8px; margin-top: 12px; }
 .rule-actions { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto; gap: 8px; margin-top: 11px; }
 @media (max-width: 900px) { .rule-controls { grid-template-columns: repeat(2, minmax(125px, 1fr)); } }
-@media (max-width: 620px) { .rule-card summary { grid-template-columns: 40px 10px 1fr auto; } .rule-card summary code { grid-column: 3 / -1; } .rule-controls, .rule-actions { grid-template-columns: 1fr; } }
+@media (max-width: 620px) { .rule-card summary { grid-template-columns: 40px auto 1fr auto; } .rule-card summary code { grid-column: 3 / -1; } .rule-controls, .rule-actions { grid-template-columns: 1fr; } }
 </style>

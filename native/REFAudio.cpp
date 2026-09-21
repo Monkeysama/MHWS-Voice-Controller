@@ -30,7 +30,7 @@ constexpr DWORD BASS_ACTIVE_PLAYING = 1;
 constexpr DWORD BASS_ACTIVE_PAUSED = 3;
 constexpr DWORD BASS_3DMODE_NORMAL = 0;
 constexpr std::size_t MAX_CHANNELS = 32;
-constexpr float MAX_VOLUME = 2.0f;
+constexpr float MAX_VOLUME = 5.0f;
 
 struct BassVector {
     float x{};
@@ -123,7 +123,7 @@ struct BassApi {
 struct AudioChannel {
     DWORD stream{};
     float base_frequency{};
-    float volume{1.0f};
+    float volume{1.5f};
     float speed{1.0f};
     double max_duration{};
     bool spatial{};

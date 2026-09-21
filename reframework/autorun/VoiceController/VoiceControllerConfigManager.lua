@@ -8,6 +8,7 @@ local Manager = {}
 
 local DEFAULT_GROUP_ID = "captured_audio"
 local DEFAULT_BLOCKED_SOURCE_PREFIXES = {"SoundLayerdRandomGenerator", "EnvPos"}
+local DEFAULT_VOLUME = 1.5
 
 -- 返回全新默认配置；用于正式包首次启动，调用方可安全修改而不会共享表引用。
 function Manager.default_config()
@@ -572,7 +573,7 @@ function Manager.add_rule_from_saved_event(manager, group_id, event, file)
             replaceStrategy = next_config.replaceStrategy or "skip_original",
             cooldownMs = 0, maxConcurrent = 1,
             candidates = {{
-                file = catalog_file, weight = 1, volume = 1, speed = 1,
+                file = catalog_file, weight = 1, volume = DEFAULT_VOLUME, speed = 1,
                 maxDurationMs = manager.catalog_duration_index[string.lower(catalog_file)] or 0
             }}
         }
@@ -640,7 +641,7 @@ function Manager.create_rule_from_event(manager, event, options)
             candidates = {{
                 file = catalog_file or requested_file,
                 weight = options.weight or 1,
-                volume = options.volume or 1,
+                volume = options.volume or DEFAULT_VOLUME,
                 speed = options.speed or 1,
                 maxDurationMs = options.max_duration_ms
                     or manager.catalog_duration_index[string.lower(catalog_file or requested_file)] or 0
@@ -668,7 +669,7 @@ function Manager.add_candidate(manager, group_id, rule_id, file, parameters)
         rule.candidates[#rule.candidates + 1] = {
             file = catalog_file or normalized,
             weight = parameters.weight or 1,
-            volume = parameters.volume,
+            volume = parameters.volume or DEFAULT_VOLUME,
             speed = parameters.speed,
             maxDurationMs = parameters.max_duration_ms
                 or manager.catalog_duration_index[string.lower(catalog_file or normalized)] or 0

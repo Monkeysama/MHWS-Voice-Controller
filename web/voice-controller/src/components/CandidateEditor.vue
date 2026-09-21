@@ -74,7 +74,7 @@ function formatDuration(durationMs?: number) {
       </label>
       <label>
         <span>{{ t('candidate.volume') }}</span>
-        <el-input-number :model-value="candidate.volume ?? 1" :min="0" :max="2" :step="0.05" :precision="2" controls-position="right" @change="updateVolume" />
+        <el-input-number :model-value="candidate.volume ?? 1.5" :min="0" :max="5" :step="0.05" :precision="2" controls-position="right" @change="updateVolume" />
       </label>
       <label>
         <span>{{ t('candidate.speed') }}</span>
