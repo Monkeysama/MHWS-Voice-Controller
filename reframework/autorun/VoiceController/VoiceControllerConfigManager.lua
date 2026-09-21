@@ -314,6 +314,15 @@ local function default_write(path, content)
 end
 
 local function default_exists(path)
+    -- 需要判断 replacement.json 是否存在
+    if type(io) == "table" and type(io.open) == "function" then
+        local file = io.open(path, "rb")
+        if file then
+            file:close()
+            return true
+        end
+        return false
+    end
     return default_read(path) ~= nil
 end
 
