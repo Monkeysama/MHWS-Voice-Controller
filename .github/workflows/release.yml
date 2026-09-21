@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      # GitHub 使用 glob 而不是正则；严格格式由 Validate tag 步骤检查。
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate tag
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_name }}" -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Tag must use the v1.2.3 format."
+          }
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+          cache-dependency-path: web/voice-controller/pnpm-lock.yaml
+
+      - name: Enable pnpm
+        shell: pwsh
+        run: corepack enable
+
+      - name: Install UI dependencies
+        working-directory: web/voice-controller
+        shell: pwsh
+        run: pnpm install --frozen-lockfile
+
+      - name: Check and build REFF UI
+        working-directory: web/voice-controller
+        shell: pwsh
+        run: |
+          pnpm run typecheck
+          pnpm run build
+
+      - name: Build release archive
+        shell: pwsh
+        run: ./tool/build-release.ps1 -Tag "${{ github.ref_name }}" -OutputDirectory "dist"
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            "dist/MHWS-Voice-Controller-${{ github.ref_name }}.zip" `
+            "dist/MHWS-Voice-Controller-${{ github.ref_name }}.zip.sha256" `
+            --title "MHWS-Voice-Controller Version" `
+            --generate-notes
