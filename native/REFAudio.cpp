@@ -483,6 +483,8 @@ void run_audio_worker() {
     const auto base_dir = reframework_dir / L"data" / L"REFAudio";
     const auto command_path = base_dir / L"audio_command.txt";
     const auto utf8_command_path = base_dir / L"audio_utf8_command.txt";
+    // UTF-8 桥仅复用一个原子写入的响应文件；请求 ID 防止上一请求的内容误匹配。
+    const auto utf8_response_path = base_dir / L"audio_utf8_response.txt";
     const auto status_path = base_dir / L"audio_status.txt";
     const auto channels_path = base_dir / L"audio_channels.txt";
     const auto backend_path = base_dir / L"audio_backend.txt";
@@ -492,6 +494,7 @@ void run_audio_worker() {
     // A command from an earlier game session must never auto-start music.
     DeleteFileW(command_path.c_str());
     DeleteFileW(utf8_command_path.c_str());
+    DeleteFileW(utf8_response_path.c_str());
     write_text(backend_path,
         "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1\tspatial_batch=1");
     BassApi bass;
@@ -527,8 +530,7 @@ void run_audio_worker() {
                 if (success && parts[2] == "utf8_read") payload = utf8_read_file(data_dir, relative_path, read_ok), success = read_ok;
                 DWORD io_error = ERROR_SUCCESS;
                 if (success && parts[2] == "utf8_write") success = utf8_write_file(data_dir, relative_path, payload, io_error);
-                const auto response_path = base_dir / (L"audio_utf8_response_" + utf8_to_wide(parts[1]) + L".txt");
-                write_text_atomic(response_path, parts[1] + "\t" + (success ? "ok\t" : "error\t") + (success ? hex_encode(payload) : ("utf8_io_" + std::to_string(io_error))) + "\n");
+                write_text_atomic(utf8_response_path, parts[1] + "\t" + (success ? "ok\t" : "error\t") + (success ? hex_encode(payload) : ("utf8_io_" + std::to_string(io_error))) + "\n");
             }
             DeleteFileW(utf8_command_path.c_str());
         }

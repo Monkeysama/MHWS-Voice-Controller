@@ -3,6 +3,8 @@ local Bridge = {}
 
 local COMMAND = "REFAudio\\audio_utf8_command.txt"
 local PAYLOAD = "REFAudio\\audio_utf8_payload.bin"
+-- 单一响应路径由 DLL 原子替换；仍按请求 ID 校验，旧响应不会提前完成新请求。
+local RESPONSE = "REFAudio\\audio_utf8_response.txt"
 
 local function read(path)
     local file = io.open(path, "rb")
@@ -36,10 +38,9 @@ local function unhex(value)
 end
 
 local function wait_response(id, timeout)
-    local response_path = "REFAudio\\audio_utf8_response_" .. id .. ".txt"
     local deadline = os.clock() + (timeout or 0.5)
     repeat
-        local response = read(response_path)
+        local response = read(RESPONSE)
         local response_id, state, payload = response and string.match(response, "^(.-)\t(.-)\t(.-)\r?\n?$")
         if response_id == id then
             if state == "ok" then return true, unhex(payload or "") end
