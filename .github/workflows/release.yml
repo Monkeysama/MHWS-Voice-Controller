@@ -58,5 +58,5 @@ jobs:
           gh release create "${{ github.ref_name }}" `
             "dist/MHWS-Voice-Controller-${{ github.ref_name }}.zip" `
             "dist/MHWS-Voice-Controller-${{ github.ref_name }}.zip.sha256" `
-            --title "MHWS-Voice-Controller Version" `
+            --title "MHWS-Voice-Controller ${{ github.ref_name }}" `
             --generate-notes
