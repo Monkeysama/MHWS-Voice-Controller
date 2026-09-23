@@ -2,7 +2,7 @@
 -- 在 REFramework Lua 线程观察自然音频事件；仅对精确匹配且替换音频已入队的请求执行配置的抑制策略。
 -- 日志资源由本脚本独占写入，使用固定容量文本避免无限增长。
 
-local VERSION = "audio-probe-v26"
+local VERSION = "audio-probe-v30"
 local ROOT = "VoiceController\\"
 local LOG = ROOT .. "audio_probe.log"
 local MAX_LINES = 1200
@@ -23,6 +23,8 @@ local CALLBACK_DURATION = 8
 local CALLBACK_END_OF_EVENT = 1
 
 local EventStore = require("VoiceController/VoiceControllerEventStore")
+local ActionContext = require("VoiceController/VoiceControllerActionContext")
+local ManagedArray = require("VoiceController/VoiceControllerManagedArray")
 local SavedEventStore = require("VoiceController/VoiceControllerSavedEventStore")
 local GameAudioReplay = require("VoiceController/VoiceControllerGameAudioReplay")
 local AudioCatalog = require("VoiceController/VoiceControllerAudioCatalog")
@@ -47,6 +49,7 @@ local recent_lock = {locked = false, category = "all", query = ""}
 local game_audio_replay = GameAudioReplay.new()
 local saved_event_store = nil
 local saved_event_error = nil
+local saved_event_keys = {}
 local last_flush = 0
 local last_snapshot = 0
 local next_sequence = 0
@@ -70,6 +73,10 @@ local scene_container_keys = {}
 local scene_containers_ready = false
 local scene_scan_root_key = nil
 local scene_scan_retry_at = 0
+local action_owner_cache = {}
+local action_owner_cache_count = 0
+local action_diagnostics = {}
+local action_diagnostic_count = 0
 local saved_source_names = {npc = {}, otomo = {}, player = {}, weapon = {}}
 local saved_source_retry_at = {npc = 0, otomo = 0}
 local replacement_runtime = ReplacementRuntime.compile({})
@@ -276,6 +283,8 @@ local function scan_scene_containers(now)
         scene_containers = {}
         scene_container_keys = {}
         scene_containers_ready = false
+        action_owner_cache = {}
+        action_owner_cache_count = 0
     end
     next_container_scan = now + 0.5
     scan_game_object(root, {}, 0)
@@ -337,8 +346,10 @@ local function load_saved_events()
     local store, err = SavedEventStore.load(SAVED_EVENTS_CONFIG)
     saved_event_store = store
     saved_event_error = err
+    saved_event_keys = {}
     if store then
         for _, event in ipairs(SavedEventStore.snapshot(store)) do
+            saved_event_keys[event.stableKey] = true
             local category = event.category
             local source = type(event.sourceObject) == "string"
                 and string.match(event.sourceObject, "^([^%[]+)") or nil
@@ -639,7 +650,181 @@ local function enable_duration_callback(request)
     pcall(request.call, request, "set_Callback", value)
 end
 
--- 音频 Hook 的轻量入队；运行在游戏线程，只读取标量，不做文件 IO 或资源访问。
+-- 使用 TDB 的继承判断识别角色组件；类型元数据不属于 Lua，仅读取、不保留对象引用。
+local function is_character_component_type(type_def)
+    if type_def == nil then return false end
+    local ok, is_character = pcall(type_def.is_a, type_def, "app.CharacterBase")
+    if ok and is_character == true then return true end
+    local current = type_def
+    for _ = 1, 24 do
+        if current == nil then return false end
+        local name_ok, name = pcall(current.get_full_name, current)
+        if name_ok and tostring(name) == "app.CharacterBase" then return true end
+        local parent_ok, parent = pcall(current.get_parent_type, current)
+        if not parent_ok then return false end
+        current = parent
+    end
+    return false
+end
+
+-- 类型运行时对象仅供 GameObject.getComponent 查找，结果由游戏拥有；失败时仍可扫描组件数组。
+local character_runtime_type = nil
+local function get_character_runtime_type()
+    if character_runtime_type ~= nil then return character_runtime_type end
+    local ok, result = pcall(function()
+        local type_def = sdk.find_type_definition("app.CharacterBase")
+        return type_def and type_def:get_runtime_type()
+    end)
+    if ok then character_runtime_type = result end
+    return character_runtime_type
+end
+
+local function managed_object_key(object)
+    if object == nil then return nil end
+    local ok, address = pcall(object.get_address, object)
+    return ok and address and tostring(address) or nil
+end
+
+-- 从声音来源对象及有限父级解析角色；先使用引擎的组件继承查找，再回退到有界数组扫描。
+-- 正反结果短时缓存，场景重建时清空；缓存中的组件引用仅在当前场景使用。
+local function resolve_action_owner(source_object)
+    if source_object == nil then return nil, "missing_source" end
+    local source_key = managed_object_key(source_object)
+    local cached = source_key and action_owner_cache[source_key] or nil
+    if cached and os.clock() < cached.retry_at then
+        return cached.owner, cached.reason
+    end
+    local current = source_object
+    local reason = "no_character_component"
+    for _ = 1, 10 do
+        local runtime_type = get_character_runtime_type()
+        if runtime_type ~= nil then
+            local direct_ok, direct = pcall(current.call, current,
+                "getComponent(System.Type)", runtime_type)
+            if direct_ok and direct ~= nil then
+                if source_key then
+                    if action_owner_cache_count >= 512 then
+                        action_owner_cache = {}
+                        action_owner_cache_count = 0
+                    end
+                    if action_owner_cache[source_key] == nil then
+                        action_owner_cache_count = action_owner_cache_count + 1
+                    end
+                    action_owner_cache[source_key] = {owner = direct, retry_at = os.clock() + 5}
+                end
+                return direct
+            end
+        end
+        local components_ok, components = pcall(current.call, current, "get_Components")
+        local elements_ok, elements = false, nil
+        if components_ok and components then
+            elements_ok, elements = pcall(components.get_elements, components)
+        end
+        if not components_ok or not elements_ok then reason = "components_unavailable" end
+        if elements_ok and type(elements) == "table" then
+            for index, component in ipairs(elements) do
+                if index > 64 then break end
+                if component ~= nil then
+                    local type_ok, type_def = pcall(component.get_type_definition, component)
+                    if type_ok and is_character_component_type(type_def) then
+                        if source_key then
+                            if action_owner_cache_count >= 512 then
+                                action_owner_cache = {}
+                                action_owner_cache_count = 0
+                            end
+                            if action_owner_cache[source_key] == nil then
+                                action_owner_cache_count = action_owner_cache_count + 1
+                            end
+                            action_owner_cache[source_key] = {owner = component, retry_at = os.clock() + 5}
+                        end
+                        return component
+                    end
+                end
+            end
+        end
+        local transform_ok, transform = pcall(current.call, current, "get_Transform")
+        if not transform_ok or transform == nil then break end
+        local parent_ok, parent = pcall(transform.call, transform, "get_Parent")
+        if not parent_ok or parent == nil then break end
+        local object_ok, parent_object = pcall(parent.call, parent, "get_GameObject")
+        if not object_ok or parent_object == nil then break end
+        current = parent_object
+    end
+    if source_key then
+        if action_owner_cache_count >= 512 then
+            action_owner_cache = {}
+            action_owner_cache_count = 0
+        end
+        if action_owner_cache[source_key] == nil then
+            action_owner_cache_count = action_owner_cache_count + 1
+        end
+        action_owner_cache[source_key] = {reason = reason, retry_at = os.clock() + 5}
+    end
+    return nil, reason
+end
+
+local function read_action_id_member(action_id, method_name, field_name)
+    if action_id == nil then return nil end
+    local method_ok, value = pcall(action_id.call, action_id, method_name)
+    if method_ok and tonumber(value) ~= nil then return tonumber(value) end
+    local field_ok, field_value = pcall(action_id.get_field, action_id, field_name)
+    return field_ok and tonumber(field_value) or nil
+end
+
+-- 在声音请求发生的同一游戏线程仅读主控制器槽位 0，不扫描子动作且不执行文件 IO。
+local function capture_action_context(source_object)
+    -- TargetGameObj 可能是监听者，无法证明其动作是此次声音的触发动作。
+    local owner, reason = resolve_action_owner(source_object)
+    if owner == nil then return nil, reason end
+    local array_ok, controllers = pcall(owner.get_field, owner, "_ActionController")
+    if not array_ok or controllers == nil then
+        -- 派生角色的按名字段查找可能只暴露自身字段，显式从声明类型读取继承字段。
+        array_ok, controllers = pcall(function()
+            local character_type = sdk.find_type_definition("app.CharacterBase")
+            local field = character_type and character_type:get_field("_ActionController")
+            return field and field:get_data(owner)
+        end)
+    end
+    if not array_ok or controllers == nil then return nil, "controller_array_unavailable" end
+    local entries, array_error = ManagedArray.read_bounded(controllers, 1)
+    if not entries then return nil, array_error or "controller_elements_unavailable" end
+    local actions = {}
+    for _, entry in ipairs(entries) do
+        local controller = entry.value
+        if controller ~= nil then
+            local id_ok, action_id = pcall(controller.call, controller, "get_CurrentActionID")
+            if not id_ok or action_id == nil then
+                id_ok, action_id = pcall(controller.get_field, controller, "_CurrentActionID")
+            end
+            local valid_ok, valid = false, nil
+            if id_ok and action_id then
+                valid_ok, valid = pcall(action_id.call, action_id, "get_Valid")
+            end
+            if not valid_ok or valid ~= false then
+                local action = {
+                    controllerIndex = entry.index,
+                    category = read_action_id_member(action_id, "get_Category", "_Category"),
+                    index = read_action_id_member(action_id, "get_Index", "_Index")
+                }
+                local current_ok, current_action = pcall(controller.call, controller, "get_CurrentAction")
+                if current_ok and current_action ~= nil then
+                    local type_ok, type_def = pcall(current_action.get_type_definition, current_action)
+                    local name_ok, type_name = false, nil
+                    if type_ok and type_def then
+                        name_ok, type_name = pcall(type_def.get_full_name, type_def)
+                    end
+                    if name_ok and type_name then action.typeName = tostring(type_name) end
+                end
+                local normalized = ActionContext.normalize(action)
+                if normalized then actions[#actions + 1] = normalized end
+            end
+        end
+    end
+    local normalized = ActionContext.normalize_list(actions)
+    return #normalized > 0 and normalized or nil, #normalized > 0 and nil or "no_valid_action"
+end
+
+-- 音频 Hook 在游戏线程快照有界动作标量并入队；不得执行文件 IO 或遍历场景树。
 local function enqueue_request(request, origin)
     if request == nil then return end
     if GameAudioReplay.is_active(game_audio_replay) then return end
@@ -693,6 +878,23 @@ local function enqueue_request(request, origin)
     local target_object = read_game_object("get_TargetGameObj")
     if is_blocked_source(source_object) then return end
     local category = classify_audio_event(source_path, source_object)
+    -- 已收藏的未分类音效也要观察动作；其他未分类音效避免扫描高频临时来源。
+    local stable_key = event_id .. ":" .. trigger_id
+    local is_saved_event = saved_event_keys[stable_key] == true
+    local should_capture_action = category ~= "unknown" or is_saved_event
+    local observed_actions, action_reason = nil, nil
+    if should_capture_action then
+        observed_actions, action_reason = capture_action_context(source_game_object)
+        -- 每个稳定键只记录一次失败原因；日志排队到帧线程，Hook 不访问磁盘。
+        if is_saved_event and not observed_actions and action_diagnostic_count < 64
+            and not action_diagnostics[stable_key] then
+            action_diagnostics[stable_key] = true
+            action_diagnostic_count = action_diagnostic_count + 1
+            queue_runtime_message("ACTION_UNRESOLVED\tkey=" .. stable_key ..
+                "\treason=" .. tostring(action_reason or "unknown") ..
+                "\tsource=" .. tostring(source_object))
+        end
+    end
     enable_duration_callback(request)
     next_sequence = next_sequence + 1
     local replayable = GameAudioReplay.capture(game_audio_replay, request)
@@ -710,7 +912,7 @@ local function enqueue_request(request, origin)
                 spec.listener_object = player_voice_object or target_game_object
                 spec.distance_enabled = true
                 return REFAudioClient.enqueue_load(replacement_client, spec)
-            end)
+            end, observed_actions)
         if dispatch.matched then
             replacement_matched = replacement_matched + 1
             replacement_queued = dispatch.queued == true
@@ -731,10 +933,15 @@ local function enqueue_request(request, origin)
         end
     end
 
+    local action_keys = {}
+    for _, action in ipairs(observed_actions or {}) do
+        action_keys[#action_keys + 1] = ActionContext.key(action)
+    end
     local message = string.format(
-        "EVENT\tOrigin=%s\tCategory=%s\tSourcePath=%s\tEventId=%s\tTriggerId=%s\tRequestId=%s\tPlayingId=%s\tGameObjId=%s\tPlaying=%s\tPositioned=%s\tContainer=%s\tSrcGameObj=%s\tTargetGameObj=%s",
+        "EVENT\tOrigin=%s\tCategory=%s\tSourcePath=%s\tEventId=%s\tTriggerId=%s\tActions=%s\tRequestId=%s\tPlayingId=%s\tGameObjId=%s\tPlaying=%s\tPositioned=%s\tContainer=%s\tSrcGameObj=%s\tTargetGameObj=%s",
         origin or "?",
-        category, source_path or "?", event_id, trigger_id, read("get_RequestId"),
+        category, source_path or "?", event_id, trigger_id,
+        #action_keys > 0 and table.concat(action_keys, ",") or "?", read("get_RequestId"),
         read("get_PlayingId"), read("get_GameObjId"), read("get_Playing"),
         read("get_Positioned"), container, source_object, target_object)
 
@@ -754,6 +961,7 @@ local function enqueue_request(request, origin)
             sourceObject = source_object,
             targetObject = target_object,
             offsetJointHash = tonumber(read("get_OffsetJointHash", "0")) or 0,
+            observedActions = observed_actions,
             replayable = replayable == true,
             durationMs = duration_by_key[event_id .. ":" .. trigger_id],
             observedAtMs = math.floor(os.clock() * 1000)
@@ -1050,6 +1258,21 @@ local function flush_pending()
             if matches_recent_lock(entry.event) then
                 EventStore.push_coalesced(
                     browser_locked_events, copy_browser_event(entry.event), math.huge)
+            end
+            -- 收藏仍以音频稳定键唯一；自然触发到新的动作时只追加动作历史，不新增收藏行。
+            if saved_event_store and type(entry.event.observedActions) == "table"
+                and #entry.event.observedActions > 0
+                and saved_event_keys[entry.event.stableKey] == true
+            then
+                local merged, merge_error = SavedEventStore.merge_observation(
+                    saved_event_store, entry.event)
+                if merged then
+                    queue_runtime_message("SAVED_EVENT_ACTION_ADDED\tkey="
+                        .. tostring(entry.event.stableKey))
+                elseif merge_error then
+                    queue_runtime_message("SAVED_EVENT_ACTION_MERGE_FAILED\tkey="
+                        .. tostring(entry.event.stableKey) .. "\treason=" .. tostring(merge_error))
+                end
             end
             messages[#messages + 1] = entry.message
             total_captured = total_captured + 1
@@ -1630,7 +1853,10 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
             or EventStore.find_latest(recent_events, stable_key)
         if not event then return false, {"recent_event_not_found"} end
         local saved, err = SavedEventStore.add(saved_event_store, event)
-        if saved then queue_runtime_message("SAVED_EVENT_ADDED\tkey=" .. tostring(stable_key)) end
+        if saved then
+            saved_event_keys[stable_key] = true
+            queue_runtime_message("SAVED_EVENT_ADDED\tkey=" .. tostring(stable_key))
+        end
         return saved, {err}
     end,
     remove_saved_event = function(stable_key)
@@ -1638,7 +1864,10 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
         -- 收藏记录与分组规则是两个独立的持久化边界；规则只依赖稳定键，不应阻止删除收藏。
         -- 分组引用查询仍保留给诊断和界面展示使用，但删除不会级联修改任何分组配置。
         local removed, err = SavedEventStore.remove(saved_event_store, stable_key)
-        if removed then queue_runtime_message("SAVED_EVENT_REMOVED\tkey=" .. tostring(stable_key)) end
+        if removed then
+            saved_event_keys[stable_key] = nil
+            queue_runtime_message("SAVED_EVENT_REMOVED\tkey=" .. tostring(stable_key))
+        end
         return removed, {err}
     end,
     update_saved_event_note = function(stable_key, note)

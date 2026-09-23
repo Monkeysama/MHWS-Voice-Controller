@@ -2,6 +2,7 @@
 -- 仅由 REFF/帧线程调用；模块拥有 JSON 数据副本，写入采用暂存校验、备份和失败回写，Hook 不访问文件系统。
 
 local Store = {}
+local ActionContext = require("VoiceController/VoiceControllerActionContext")
 
 local function copy_json(value)
     if type(value) ~= "table" then return value end
@@ -43,7 +44,8 @@ local function normalize_event(event)
         note = normalize_note(event.note),
         savedAt = event.savedAt,
         lastCapturedAt = event.lastCapturedAt or event.capturedAt,
-        durationMs = tonumber(event.durationMs)
+        durationMs = tonumber(event.durationMs),
+        observedActions = ActionContext.normalize_list(event.observedActions)
     }
 end
 
@@ -71,15 +73,19 @@ end
 local function normalize_document(document)
     document = type(document) == "table" and document or {}
     local events = {}
-    local seen = {}
+    local by_key = {}
     for _, raw in ipairs(type(document.events) == "table" and document.events or {}) do
         local event = normalize_event(raw)
-        if event and not seen[event.stableKey] then
-            seen[event.stableKey] = true
+        local existing = event and by_key[event.stableKey] or nil
+        if event and not existing then
+            by_key[event.stableKey] = event
             events[#events + 1] = event
+        elseif event and existing then
+            existing.observedActions = ActionContext.merge(
+                existing.observedActions, event.observedActions)
         end
     end
-    return {schemaVersion = 1, events = events}
+    return {schemaVersion = 2, events = events}
 end
 
 local function persist(store, document)
@@ -113,14 +119,25 @@ function Store.load(path, file_api)
     local read = file_api.read or default_read
     local decode = file_api.decode or json.load_string
     local content = read(path)
-    local document = {schemaVersion = 1, events = {}}
+    local document = {schemaVersion = 2, events = {}}
+    local removed_subactions = false
     -- REFramework fs.read 在文件不存在时可能返回 nil、false 或空字符串；这些都表示尚未创建收藏文件。
     if content ~= nil and content ~= false and tostring(content) ~= "" then
         local ok, decoded = pcall(decode, content)
         if not ok or type(decoded) ~= "table" then return nil, "saved_events_invalid" end
+        for _, event in ipairs(type(decoded.events) == "table" and decoded.events or {}) do
+            for _, action in ipairs(type(event.observedActions) == "table"
+                and event.observedActions or {}) do
+                if type(action) == "table" and tonumber(action.controllerIndex) ~= 0 then
+                    removed_subactions = true
+                    break
+                end
+            end
+            if removed_subactions then break end
+        end
         document = normalize_document(decoded)
     end
-    return {
+    local store = {
         path = path,
         document = document,
         read = read,
@@ -128,6 +145,12 @@ function Store.load(path, file_api)
         encode = file_api.encode or function(value) return json.dump_string(value, 2) end,
         decode = decode
     }
+    -- 加载时一次性清除历史子动作；复用暂存校验与备份，失败时内存仍仅显示主动作。
+    if removed_subactions then
+        local written, err = persist(store, document)
+        if not written then return store, "subaction_cleanup_failed." .. tostring(err) end
+    end
+    return store
 end
 
 function Store.snapshot(store)
@@ -141,11 +164,38 @@ function Store.contains(store, stable_key)
     return false
 end
 
--- 永久收藏近期事件；同一稳定键幂等，只有持久化成功才提交内存状态。
+local function find_event(document, stable_key)
+    for _, event in ipairs(document.events or {}) do
+        if event.stableKey == stable_key then return event end
+    end
+    return nil
+end
+
+-- 把新的动作观察合并到现有收藏；只有首次出现的动作会触发磁盘写入。
+function Store.merge_observation(store, event)
+    local normalized, normalize_error = normalize_event(event)
+    if not normalized then return false, normalize_error end
+    local next_document = normalize_document(store.document)
+    local existing = find_event(next_document, normalized.stableKey)
+    if not existing then return false, "saved_event_not_found" end
+    local merged, changed = ActionContext.merge(existing.observedActions, normalized.observedActions)
+    if not changed then return false, nil end
+    existing.observedActions = merged
+    existing.lastCapturedAt = normalized.lastCapturedAt or existing.lastCapturedAt
+    local saved, save_error = persist(store, next_document)
+    if not saved then return false, save_error end
+    store.document = next_document
+    return true, normalized.stableKey
+end
+
+-- 永久收藏近期事件；同一稳定键仍只有一行，再次收藏只补充此前未记录的动作。
 function Store.add(store, event, saved_at)
     local normalized, err = normalize_event(event)
     if not normalized then return false, err end
-    if Store.contains(store, normalized.stableKey) then return false, "already_saved" end
+    if Store.contains(store, normalized.stableKey) then
+        local merged, merge_error = Store.merge_observation(store, normalized)
+        return merged, merge_error or (merged and normalized.stableKey or "already_saved")
+    end
     -- 收藏时间属于用户界面数据，使用当前系统本地时区并直接保存统一可读格式。
     normalized.savedAt = saved_at or os.date("%Y-%m-%d %H:%M:%S")
     local next_document = normalize_document(store.document)

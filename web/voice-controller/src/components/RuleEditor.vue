@@ -116,7 +116,12 @@ function addGroup() {
 function addRule(group: RuleGroup) {
   const value = groupSelection(group.id);
   if (!value.stableKey || !value.file) return;
-  emit('addRuleFromSaved', {groupId: group.id, stableKey: value.stableKey, file: value.file});
+  emit('addRuleFromSaved', {
+    groupId: group.id,
+    stableKey: value.stableKey,
+    actionKey: '',
+    file: value.file,
+  });
   value.stableKey = '';
   value.file = '';
 }
@@ -165,8 +170,9 @@ onUnmounted(() => document.removeEventListener('wheel', handleSelectDropdownWhee
           <span>{{ t('groups.conflicts') }} <small>{{ t('common.groups', {count: conflicts.length}) }}</small></span>
         </summary>
         <div class="conflict-content">
-          <div v-for="conflict in conflicts" :key="conflict.stableKey" class="conflict-row">
+          <div v-for="conflict in conflicts" :key="conflict.matchKey || conflict.stableKey" class="conflict-row">
             <code>{{ conflict.stableKey }}</code>
+            <el-tag v-if="conflict.actionKey" size="small" effect="plain">{{ t('groups.actionConflict', {key: conflict.actionKey}) }}</el-tag>
             <div class="conflict-entries">
               <div v-if="conflict.winner" class="conflict-entry winner">
                 <el-tag size="small" type="success" effect="dark">{{ t('groups.active') }}</el-tag>
@@ -241,6 +247,7 @@ onUnmounted(() => document.removeEventListener('wheel', handleSelectDropdownWhee
               <RuleCard
                 :group-id="group.id" :rule="rule" :catalog-entries="groupFiles(group)"
                 :event-note="savedEventNotes.get(`${rule.eventId}:${rule.triggerId}`)"
+                :observed-actions="savedEvents.find(event => event.stableKey === `${rule.eventId}:${rule.triggerId}`)?.observedActions ?? []"
                 :default-mode="defaultMode" :default-strategy="defaultStrategy" :busy="busy"
                 @update-rule="emit('updateRule', $event)" @remove-rule="emit('removeRule', $event)"
                 @add-candidate="emit('addCandidate', $event)" @update-candidate="emit('updateCandidate', $event)"
@@ -314,7 +321,7 @@ onUnmounted(() => document.removeEventListener('wheel', handleSelectDropdownWhee
 .conflict-entries { display: grid; gap: 6px; margin-top: 6px; }
 .conflict-entry { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
 .conflict-entry.winner { font-weight: 600; }
-.rule-create { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr) auto; gap: 8px; margin: 12px 0; }
+.rule-create { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(220px, 1fr) auto; gap: 8px; margin: 12px 0; }
 .rules, .rule-wrap { display: grid; gap: 8px; }
 .empty-group, .empty-state { padding: 24px 12px; text-align: center; }
 .empty-state { color: var(--vc-muted); }

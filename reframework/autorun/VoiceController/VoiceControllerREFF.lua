@@ -142,7 +142,7 @@ function Service.register(api, dependencies)
             assert(event ~= nil, "saved_event_not_found")
             return ConfigManager.add_rule_from_saved_event(
                 manager, require_string(params, "groupId"), event,
-                require_string(params, "file"))
+                require_string(params, "file"), params.actionKey)
         end),
         ["voice-controller.update-rule"] = mutate(function(manager, params)
             return ConfigManager.update_rule(
@@ -165,7 +165,9 @@ function Service.register(api, dependencies)
                     weight = params.weight,
                     volume = params.volume,
                     speed = params.speed,
-                    max_duration_ms = params.maxDurationMs
+                    max_duration_ms = params.maxDurationMs,
+                    action_key = params.actionKey,
+                    saved_event = api.get_saved_event(params.stableKey)
                 })
         end),
         ["voice-controller.update-candidate"] = mutate(function(manager, params)
@@ -176,7 +178,9 @@ function Service.register(api, dependencies)
                     weight = params.weight,
                     volume = params.volume,
                     speed = params.speed,
-                    max_duration_ms = params.maxDurationMs
+                    max_duration_ms = params.maxDurationMs,
+                    action_key = params.actionKey,
+                    saved_event = api.get_saved_event(params.stableKey)
                 })
         end),
         ["voice-controller.remove-candidate"] = mutate(function(manager, params)

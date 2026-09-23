@@ -64,10 +64,10 @@ function Runtime.refresh_preflight(compiled, check_fn)
     return all_ready
 end
 
-local function find_rule(compiled, event_id, trigger_id)
+local function find_rule(compiled, event_id, trigger_id, observed_actions)
     if not compiled or not compiled.enabled then return nil end
     if compiled.kind == "v2" then
-        return RuleSet.find(compiled.rule_set, event_id, trigger_id)
+        return RuleSet.find(compiled.rule_set, event_id, trigger_id, observed_actions)
     end
     if RuleEngine.match(compiled.rule, event_id, trigger_id) then return compiled.rule end
     return nil
@@ -83,8 +83,8 @@ local function candidate_for_v1(rule)
 end
 
 -- Hook 线程执行匹配、冷却/并发门控和入队；入队失败会立即归还 v2 并发令牌。
-function Runtime.dispatch(compiled, event_id, trigger_id, now_ms, random_value, enqueue_fn)
-    local rule = find_rule(compiled, event_id, trigger_id)
+function Runtime.dispatch(compiled, event_id, trigger_id, now_ms, random_value, enqueue_fn, observed_actions)
+    local rule = find_rule(compiled, event_id, trigger_id, observed_actions)
     if not rule then return {matched = false} end
     if rule.mode == "observe" then
         return {matched = true, mode = "observe", reason = "observe", rule = rule}
@@ -94,7 +94,7 @@ function Runtime.dispatch(compiled, event_id, trigger_id, now_ms, random_value, 
     local candidate = nil
     local reason = nil
     if compiled.kind == "v2" then
-        candidate = RuleSet.select_candidate(rule, random_value)
+        candidate = RuleSet.select_candidate(rule, random_value, observed_actions)
     else
         candidate = candidate_for_v1(rule)
     end
@@ -111,7 +111,7 @@ function Runtime.dispatch(compiled, event_id, trigger_id, now_ms, random_value, 
     end
 
     if compiled.kind == "v2" then
-        token, reason = RuleSet.acquire(rule, now_ms, random_value)
+        token, reason = RuleSet.acquire(rule, now_ms, random_value, observed_actions, candidate)
         if not token then
             return {matched = true, mode = rule.mode, reason = reason, rule = rule}
         end

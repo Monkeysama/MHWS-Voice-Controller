@@ -3,10 +3,18 @@ export type ReplaceStrategy = 'skip_original' | 'stop_playing_id';
 
 export interface AudioCandidate {
   file: string;
+  action?: AudioAction;
   weight?: number;
   volume?: number;
   speed?: number;
   maxDurationMs?: number;
+}
+
+export interface AudioAction {
+  controllerIndex: number;
+  category: number;
+  index: number;
+  typeName?: string;
 }
 
 export interface VoiceRule {
@@ -14,6 +22,7 @@ export interface VoiceRule {
   enabled?: boolean;
   eventId: string;
   triggerId: string;
+  action?: AudioAction;
   mode?: RuleMode;
   replaceStrategy?: ReplaceStrategy;
   cooldownMs?: number;
@@ -68,6 +77,7 @@ export interface AudioEvent {
   durationMs?: number;
   note?: string;
   savedAt?: string;
+  observedActions?: AudioAction[];
 }
 
 export interface CatalogEntry {
@@ -153,6 +163,8 @@ export interface GroupConflictEntry {
 
 export interface GroupConflict {
   stableKey: string;
+  actionKey?: string;
+  matchKey?: string;
   winner: GroupConflictEntry | null;
   losers: GroupConflictEntry[];
 }

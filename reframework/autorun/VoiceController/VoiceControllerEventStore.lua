@@ -2,6 +2,7 @@
 -- 仅由 REFramework Lua 帧线程写入和读取；存储拥有事件表引用，聚合命中会移动到队尾，Hook 不执行数组整理。
 
 local EventStore = {}
+local ActionContext = require("VoiceController/VoiceControllerActionContext")
 
 -- 创建固定容量环形队列；capacity 必须是正整数。
 function EventStore.new(capacity)
@@ -55,6 +56,8 @@ function EventStore.push_coalesced(store, event, window_ms)
         previous.sourcePath = event.sourcePath or previous.sourcePath
         previous.sourceObject = event.sourceObject or previous.sourceObject
         previous.targetObject = event.targetObject or previous.targetObject
+        local merged_actions = ActionContext.merge(previous.observedActions, event.observedActions)
+        previous.observedActions = #merged_actions > 0 and merged_actions or nil
         previous.replacement = event.replacement
         previous.replayable = event.replayable == true
         for index, item in ipairs(store.items) do

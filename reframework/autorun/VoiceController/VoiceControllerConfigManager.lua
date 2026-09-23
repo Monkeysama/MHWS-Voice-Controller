@@ -3,6 +3,7 @@
 
 local RuleSet = require("VoiceController/VoiceControllerRuleSet")
 local GroupStore = require("VoiceController/VoiceControllerGroupStore")
+local ActionContext = require("VoiceController/VoiceControllerActionContext")
 
 local Manager = {}
 
@@ -148,6 +149,21 @@ end
 local function lower_file(value)
     local normalized = normalize_file(value)
     return normalized and string.lower(normalized) or nil
+end
+
+local function rule_match_key(event_id, trigger_id, action)
+    return ActionContext.rule_key(tostring(event_id) .. ":" .. tostring(trigger_id), action)
+end
+
+-- 动作只能从该收藏实际观察到的列表中选择；空字符串明确表示不限动作。
+local function select_observed_action(event, action_key)
+    if action_key == nil or tostring(action_key) == "" then return nil, nil end
+    for _, action in ipairs(ActionContext.normalize_list(
+        type(event) == "table" and event.observedActions or nil))
+    do
+        if ActionContext.key(action) == tostring(action_key) then return action, nil end
+    end
+    return nil, "saved_action_not_found"
 end
 
 local function find_group(config, group_id)
@@ -428,6 +444,38 @@ local function reconcile_group_folders(config, folders, present_folders)
     return removed
 end
 
+-- 旧规则级动作约束迁移到候选；同组相同音频键的规则合并为一条，保留各候选原始参数。
+-- 只修改编辑会话深拷贝；写盘仍需用户显式保存。
+local function migrate_rule_actions(config)
+    for _, group in ipairs(config.groups or {}) do
+        local by_key, retained = {}, {}
+        for _, rule in ipairs(group.rules or {}) do
+            local legacy_action = rule.action ~= nil
+            local key = tostring(rule.eventId) .. ":" .. tostring(rule.triggerId)
+            if rule.action ~= nil then
+                for _, candidate in ipairs(rule.candidates or {}) do
+                    if candidate.action == nil then candidate.action = rule.action end
+                end
+                rule.action = nil
+            end
+            local existing = by_key[key]
+            if existing and (legacy_action or existing._legacy_action_migrated) then
+                for _, candidate in ipairs(rule.candidates or {}) do
+                    existing.candidates[#existing.candidates + 1] = candidate
+                end
+                existing.enabled = existing.enabled or rule.enabled
+            else
+                rule._legacy_action_migrated = legacy_action
+                by_key[key] = rule
+                retained[#retained + 1] = rule
+            end
+        end
+        for _, rule in ipairs(retained) do rule._legacy_action_migrated = nil end
+        if #retained == 0 then group.rules = {_empty = true}
+        else group.rules = retained end
+    end
+end
+
 -- 创建配置编辑会话；输入配置会深拷贝，目录快照只转换为只读索引。
 function Manager.new(config, catalog_snapshot, group_folders, present_folders)
     local copied, copy_error = copy_json(config)
@@ -436,6 +484,7 @@ function Manager.new(config, catalog_snapshot, group_folders, present_folders)
         copied.blockedSourcePrefixes = Manager.default_blocked_source_prefixes()
     end
     local removed_groups = reconcile_group_folders(copied, group_folders, present_folders)
+    migrate_rule_actions(copied)
     local catalog_ready = type(catalog_snapshot) == "table"
         and type(catalog_snapshot.files) == "table"
         and type(catalog_snapshot.errors) == "table"
@@ -544,14 +593,16 @@ function Manager.remove_group(manager, group_id)
 end
 
 -- 从永久收藏向指定分组添加规则；候选必须属于该分组的独立 Audio 目录。
-function Manager.add_rule_from_saved_event(manager, group_id, event, file)
+function Manager.add_rule_from_saved_event(manager, group_id, event, file, action_key)
     if not manager.catalog_ready then return false, {"catalog_not_ready"} end
     local event_id = normalize_uint(type(event) == "table" and event.eventId)
     local trigger_id = normalize_uint(type(event) == "table" and event.triggerId)
     local normalized_file = normalize_file(file)
     local catalog_file = normalized_file and manager.catalog_index[string.lower(normalized_file)] or nil
+    local action, action_error = select_observed_action(event, action_key)
     if not event_id or not trigger_id then return false, {"invalid_event"} end
     if not catalog_file then return false, {"file_not_in_catalog"} end
+    if action_error then return false, {action_error} end
     return apply_transaction(manager, function(next_config)
         local group = find_group(next_config, group_id)
         if not group then return false, "group_not_found" end
@@ -560,9 +611,21 @@ function Manager.add_rule_from_saved_event(manager, group_id, event, file)
             return false, "outside_group_audio"
         end
         local stable_key = event_id .. ":" .. trigger_id
+        local candidate = {
+            file = catalog_file, weight = 1, volume = DEFAULT_VOLUME, speed = 1,
+            maxDurationMs = manager.catalog_duration_index[string.lower(catalog_file)] or 0,
+            action = action
+        }
         for _, rule in ipairs(group.rules or {}) do
             if tostring(rule.eventId) .. ":" .. tostring(rule.triggerId) == stable_key then
-                return false, "duplicate_stable_key_in_group." .. stable_key
+                for _, existing in ipairs(rule.candidates or {}) do
+                    if lower_file(existing.file) == lower_file(catalog_file)
+                        and ActionContext.key(existing.action) == ActionContext.key(action) then
+                        return false, "duplicate_candidate"
+                    end
+                end
+                rule.candidates[#rule.candidates + 1] = candidate
+                return rule.id
             end
         end
         if group.rules._empty then group.rules = {} end
@@ -572,10 +635,7 @@ function Manager.add_rule_from_saved_event(manager, group_id, event, file)
             mode = "replace",
             replaceStrategy = next_config.replaceStrategy or "skip_original",
             cooldownMs = 0, maxConcurrent = 1,
-            candidates = {{
-                file = catalog_file, weight = 1, volume = DEFAULT_VOLUME, speed = 1,
-                maxDurationMs = manager.catalog_duration_index[string.lower(catalog_file)] or 0
-            }}
+            candidates = {candidate}
         }
         return id
     end)
@@ -612,10 +672,13 @@ function Manager.create_rule_from_event(manager, event, options)
 
     return apply_transaction(manager, function(next_config)
         local stable_key = event_id .. ":" .. trigger_id
+        local action = options.action ~= nil and ActionContext.normalize(options.action) or nil
+        if options.action ~= nil and not action then return false, "invalid_action" end
+        local match_key = ActionContext.rule_key(stable_key, action)
         for _, group in ipairs(next_config.groups or {}) do
             for _, rule in ipairs(group.rules or {}) do
-                if normalize_uint(rule.eventId) .. ":" .. normalize_uint(rule.triggerId) == stable_key then
-                    return false, "duplicate_stable_key." .. stable_key
+                if rule_match_key(rule.eventId, rule.triggerId, rule.action) == match_key then
+                    return false, "duplicate_rule_match." .. match_key
                 end
             end
         end
@@ -633,6 +696,7 @@ function Manager.create_rule_from_event(manager, event, options)
             enabled = options.enabled == true,
             eventId = event_id,
             triggerId = trigger_id,
+            action = action,
             mode = options.mode or "replace",
             replaceStrategy = options.replace_strategy
                 or next_config.replaceStrategy or "skip_original",
@@ -663,11 +727,21 @@ function Manager.add_candidate(manager, group_id, rule_id, file, parameters)
         local rule = find_rule(next_config, group_id, rule_id)
         if not rule then return false, "rule_not_found" end
         local key = string.lower(catalog_file or normalized)
+        if parameters.action_key ~= nil then
+            local action, action_error = select_observed_action(parameters.saved_event,
+                parameters.action_key)
+            if action_error then return false, action_error end
+            parameters.action = action
+        end
         for _, candidate in ipairs(rule.candidates or {}) do
-            if lower_file(candidate.file) == key then return false, "duplicate_candidate" end
+            if lower_file(candidate.file) == key
+                and ActionContext.key(candidate.action) == ActionContext.key(parameters.action) then
+                return false, "duplicate_candidate"
+            end
         end
         rule.candidates[#rule.candidates + 1] = {
             file = catalog_file or normalized,
+            action = parameters.action,
             weight = parameters.weight or 1,
             volume = parameters.volume or DEFAULT_VOLUME,
             speed = parameters.speed,
@@ -701,6 +775,20 @@ function Manager.update_candidate(manager, group_id, rule_id, candidate_index, p
         if patch.volume ~= nil then candidate.volume = patch.volume end
         if patch.speed ~= nil then candidate.speed = patch.speed end
         if patch.max_duration_ms ~= nil then candidate.maxDurationMs = patch.max_duration_ms end
+        if patch.action_key ~= nil then
+            if patch.action_key == "" then candidate.action = nil
+            else
+                local action = select_observed_action(patch.saved_event, patch.action_key)
+                if not action then return false, "saved_action_not_found" end
+                candidate.action = action
+            end
+        end
+        for index, other in ipairs(rule.candidates) do
+            if index ~= candidate_index and lower_file(other.file) == lower_file(candidate.file)
+                and ActionContext.key(other.action) == ActionContext.key(candidate.action) then
+                return false, "duplicate_candidate"
+            end
+        end
         return candidate_index
     end)
 end

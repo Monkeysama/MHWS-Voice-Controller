@@ -3,6 +3,7 @@ import {computed, shallowRef} from 'vue';
 import {useI18n} from 'vue-i18n';
 import {Check, Close, Delete, EditPen, Search, VideoPlay} from '@element-plus/icons-vue';
 import type {AudioEvent} from '@/types';
+import {audioActionKey, audioActionLabel} from '@/utils/audioActions';
 import PlaybackStatus from '@/components/PlaybackStatus.vue';
 
 const props = defineProps<{events: AudioEvent[]; busy: boolean}>();
@@ -24,7 +25,8 @@ const visibleEvents = computed(() => {
   const needle = query.value.trim().toLowerCase();
   return props.events.filter(event => {
     if (category.value !== 'all' && event.category !== category.value) return false;
-    return !needle || [event.stableKey, event.sourcePath, event.sourceObject]
+    return !needle || [event.stableKey, event.sourcePath, event.sourceObject,
+      ...(event.observedActions ?? []).flatMap(action => [audioActionKey(action), action.typeName])]
       .some(value => String(value ?? '').toLowerCase().includes(needle));
   });
 });
@@ -32,6 +34,13 @@ function formatDuration(durationMs?: number) {
   return durationMs
     ? t('common.seconds', {value: (durationMs / 1000).toFixed(2)})
     : t('common.durationPending');
+}
+function formatAction(action: NonNullable<AudioEvent['observedActions']>[number]) {
+  return audioActionLabel(action, {
+    controller: t('action.controller'),
+    category: t('action.category'),
+    action: t('action.id'),
+  });
 }
 // 新记录已是本地时间格式；旧版 UTC ISO 时间在展示时转换到当前系统时区，保持历史数据兼容。
 function formatSavedAt(value?: string) {
@@ -95,6 +104,13 @@ function handleListWheel(event: WheelEvent) {
               <el-button class="note-edit" :icon="EditPen" text :aria-label="t('saved.noteEdit')" :disabled="busy" @click="beginNoteEdit(event)" />
             </el-tooltip>
           </div>
+          <div v-if="event.observedActions?.length" class="observed-actions">
+            <span>{{ t('saved.observedActions') }}</span>
+            <el-tag v-for="action in event.observedActions" :key="audioActionKey(action)" size="small" effect="plain" disable-transitions>
+              {{ formatAction(action) }}
+            </el-tag>
+          </div>
+          <div v-else class="observed-actions"><span>{{ t('saved.actionUnavailable') }}</span></div>
           <span>{{ event.sourcePath || event.sourceObject || t('common.unknownSource') }}</span><small>{{ formatDuration(event.durationMs) }} · {{ t('saved.savedAt', {time: formatSavedAt(event.savedAt)}) }}</small>
         </div>
         <div class="actions">
@@ -133,6 +149,9 @@ function handleListWheel(event: WheelEvent) {
 .note-editor :deep(.el-input__wrapper) { min-height: 28px; }
 .saved-main code { color: var(--vc-accent); }
 .saved-main > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.observed-actions { display: flex; min-width: 0; align-items: center; gap: 6px; flex-wrap: wrap; }
+.observed-actions > span { color: var(--vc-muted); font-size: 12px; }
+.observed-actions :deep(.el-tag) { color: var(--vc-text); }
 .actions { gap: 6px; }
 .play-button { width: 32px; min-width: 32px; height: 32px; padding: 0; border-radius: 4px !important; }
 .empty-state { padding: 36px 16px; color: var(--vc-muted); text-align: center; }

@@ -3,12 +3,13 @@ import {computed, shallowRef} from 'vue';
 import {useI18n} from 'vue-i18n';
 import {ArrowRight, Delete, Plus} from '@element-plus/icons-vue';
 import CandidateEditor from './CandidateEditor.vue';
-import type {CatalogEntry, ReplaceStrategy, RuleMode, VoiceRule} from '@/types';
+import type {AudioAction, CatalogEntry, ReplaceStrategy, RuleMode, VoiceRule} from '@/types';
 
 const props = defineProps<{
   groupId: string;
   rule: VoiceRule;
   eventNote?: string;
+  observedActions: AudioAction[];
   catalogEntries: CatalogEntry[];
   defaultMode: RuleMode;
   defaultStrategy: ReplaceStrategy;
@@ -54,12 +55,14 @@ function updateRule(patch: Record<string, unknown>) {
 
 function addCandidate() {
   if (!selectedFile.value) return;
-  emit('addCandidate', {...ruleRef(), file: selectedFile.value, weight: 1});
+  emit('addCandidate', {...ruleRef(), file: selectedFile.value, weight: 1,
+    stableKey: `${props.rule.eventId}:${props.rule.triggerId}`});
   selectedFile.value = '';
 }
 
 function updateCandidate(index: number, patch: Record<string, unknown>) {
-  emit('updateCandidate', {...ruleRef(), candidateIndex: index + 1, ...patch});
+  emit('updateCandidate', {...ruleRef(), candidateIndex: index + 1,
+    stableKey: `${props.rule.eventId}:${props.rule.triggerId}`, ...patch});
 }
 
 function removeCandidate(index: number) {
@@ -138,6 +141,7 @@ const setConcurrent = (value: number | undefined) => setInteger('maxConcurrent',
           v-for="(candidate, index) in rule.candidates"
           :key="`${candidate.file}:${index}`"
           :candidate="candidate"
+          :observed-actions="observedActions"
           :duration-ms="catalogDuration(candidate.file)"
           :index="index"
           :count="rule.candidates.length"
@@ -164,7 +168,7 @@ const setConcurrent = (value: number | undefined) => setInteger('maxConcurrent',
 <style scoped>
 .rule-card { overflow: hidden; border: 1px solid var(--vc-border); border-radius: 6px; background: var(--vc-surface); transition: border-color 120ms ease, background-color 120ms ease; }
 .rule-card + .rule-card { margin-top: 9px; }
-.rule-card summary { display: grid; min-height: 56px; grid-template-columns: 40px auto minmax(120px, .7fr) minmax(180px, 1fr) auto; align-items: center; gap: 10px; padding: 7px 10px; cursor: pointer; list-style: none; }
+.rule-card summary { display: grid; min-height: 56px; grid-template-columns: 40px auto minmax(140px, 1fr) minmax(150px, auto) auto; align-items: center; gap: 10px; padding: 7px 10px; cursor: pointer; list-style: none; }
 .rule-card summary::-webkit-details-marker { display: none; }
 .rule-card summary:hover, .rule-card summary:focus-visible { background: var(--vc-accent-soft); outline: none; }
 .rule-card:has(> summary:hover), .rule-card:has(> summary:focus-visible) { border-color: var(--vc-accent); }
@@ -182,5 +186,5 @@ const setConcurrent = (value: number | undefined) => setInteger('maxConcurrent',
 .candidate-list { display: grid; gap: 8px; margin-top: 12px; }
 .rule-actions { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto; gap: 8px; margin-top: 11px; }
 @media (max-width: 900px) { .rule-controls { grid-template-columns: repeat(2, minmax(125px, 1fr)); } }
-@media (max-width: 620px) { .rule-card summary { grid-template-columns: 40px auto 1fr auto; } .rule-card summary code { grid-column: 3 / -1; } .rule-controls, .rule-actions { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .rule-card summary { grid-template-columns: 40px auto 1fr auto; } .rule-card summary code { grid-column: 3 / -1; } .rule-controls, .rule-actions { grid-template-columns: 1fr; } }
 </style>

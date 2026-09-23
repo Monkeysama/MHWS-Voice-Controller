@@ -14,6 +14,7 @@
 local GroupStore = {}
 
 local RuleSet = require("VoiceController/VoiceControllerRuleSet")
+local ActionContext = require("VoiceController/VoiceControllerActionContext")
 
 GroupStore.ROOT = "VoiceController\\Groups"
 GroupStore.AUDIO_DIR = "Audio"
@@ -204,6 +205,11 @@ local function normalize_rule(folder, raw_rule, index, errors)
         errors[#errors + 1] = label .. ".invalid_rule_id"
         return nil
     end
+    local action = raw_rule.action ~= nil and ActionContext.normalize(raw_rule.action) or nil
+    if raw_rule.action ~= nil and action == nil then
+        errors[#errors + 1] = label .. ".invalid_action"
+        return nil
+    end
     local candidates = raw_rule.candidates
     if type(candidates) ~= "table" or #candidates == 0 then
         errors[#errors + 1] = label .. ".missing_candidates"
@@ -213,6 +219,10 @@ local function normalize_rule(folder, raw_rule, index, errors)
     for candidate_index, candidate in ipairs(candidates) do
         candidate = type(candidate) == "table" and candidate or {}
         local file, relative = resolve_audio_path(folder, candidate.file)
+        if candidate.action ~= nil and ActionContext.normalize(candidate.action) == nil then
+            errors[#errors + 1] = string.format("%s.candidates.%d.invalid_action",
+                label, candidate_index)
+        end
         if not file then
             errors[#errors + 1] = string.format("%s.candidates.%d.audio_outside_group",
                 label, candidate_index)
@@ -220,6 +230,7 @@ local function normalize_rule(folder, raw_rule, index, errors)
             resolved[#resolved + 1] = {
                 file = file,
                 relative = relative,
+                action = candidate.action and ActionContext.normalize(candidate.action) or action,
                 weight = candidate.weight,
                 volume = candidate.volume,
                 speed = candidate.speed,
@@ -331,6 +342,8 @@ function GroupStore.to_document(group, default_replace_strategy)
             if relative then
                 candidates[#candidates + 1] = {
                     file = relative,
+                    action = candidate.action and ActionContext.normalize(candidate.action)
+                        or (rule.action and ActionContext.normalize(rule.action)),
                     weight = candidate.weight,
                     volume = candidate.volume,
                     speed = candidate.speed,
@@ -461,18 +474,25 @@ function GroupStore.collect_conflicts(groups)
         local group_enabled = group.enabled ~= false
         local group_id = tostring(group.id)
         for _, rule in ipairs(group.rules or {}) do
-            local key = tostring(rule.eventId) .. ":" .. tostring(rule.triggerId)
-            if by_key[key] == nil then
-                by_key[key] = {}
-                order[#order + 1] = key
+            local stable_key = tostring(rule.eventId) .. ":" .. tostring(rule.triggerId)
+            local keys = {}
+            for _, candidate in ipairs(rule.candidates or {}) do
+                keys[ActionContext.rule_key(stable_key, candidate.action or rule.action)] = true
             end
-            by_key[key][#by_key[key] + 1] = {
-                group_id = group_id,
-                group_name = tostring(group.name or group_id),
-                rule_id = tostring(rule.id),
-                mode = tostring(rule.mode or "observe"),
-                enabled = rule.enabled ~= false and group_enabled
-            }
+            if next(keys) == nil then keys[ActionContext.rule_key(stable_key, rule.action)] = true end
+            for key in pairs(keys) do
+                if by_key[key] == nil then
+                    by_key[key] = {}
+                    order[#order + 1] = key
+                end
+                by_key[key][#by_key[key] + 1] = {
+                    group_id = group_id,
+                    group_name = tostring(group.name or group_id),
+                    rule_id = tostring(rule.id),
+                    mode = tostring(rule.mode or "observe"),
+                    enabled = rule.enabled ~= false and group_enabled
+                }
+            end
         end
     end
     local conflicts = {}
@@ -488,7 +508,13 @@ function GroupStore.collect_conflicts(groups)
                     losers[#losers + 1] = entry
                 end
             end
-            conflicts[#conflicts + 1] = {stableKey = key, winner = winner, losers = losers}
+            conflicts[#conflicts + 1] = {
+                stableKey = string.match(key, "^([^@]+)") or key,
+                actionKey = string.match(key, "@(.+)$"),
+                matchKey = key,
+                winner = winner,
+                losers = losers
+            }
         end
     end
     return conflicts
