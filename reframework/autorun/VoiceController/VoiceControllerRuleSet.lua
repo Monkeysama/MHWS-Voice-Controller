@@ -273,6 +273,23 @@ function RuleSet.find(compiled, event_id, trigger_id, observed_actions)
     return fallback
 end
 
+-- 判断指定游戏音频是否存在需要读取主动作的候选；用于关闭近期采集时保留动作绑定替换。
+function RuleSet.needs_action_context(compiled, event_id, trigger_id)
+    if not compiled then return false end
+    local event_text = normalize_uint(event_id)
+    local trigger_text = normalize_uint(trigger_id)
+    if not event_text or not trigger_text then return false end
+    local stable_key = event_text .. ":" .. trigger_text
+    for _, rule in ipairs(compiled.by_stable[stable_key] or {}) do
+        if rule.enabled then
+            for _, candidate in ipairs(rule.candidates or {}) do
+                if candidate.action_key ~= nil then return true end
+            end
+        end
+    end
+    return false
+end
+
 -- 根据本次动作筛选候选；精确动作优先，只有没有精确候选时才考虑所有动作候选。
 local function eligible_candidates(rule, observed_actions)
     local observed = {}

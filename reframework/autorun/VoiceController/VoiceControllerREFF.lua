@@ -114,6 +114,12 @@ function Service.register(api, dependencies)
             assert(updated, mutation_error(err))
             return changed()
         end,
+        ["voice-controller.set-recent-capture"] = function(params)
+            params = params or {}
+            local updated, err = api.set_recent_capture(params.enabled == true)
+            assert(updated, mutation_error(err))
+            return changed()
+        end,
         ["voice-controller.add-group"] = function(params)
             local manager = get_manager()
             local added, group_id = ConfigManager.add_group(manager, require_string(params or {}, "name"))

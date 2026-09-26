@@ -5,11 +5,18 @@ import {CollectionTag, Lock, Search, Unlock, VideoPlay} from '@element-plus/icon
 import type {AudioEvent} from '@/types';
 import PlaybackStatus from '@/components/PlaybackStatus.vue';
 
-const props = defineProps<{events: AudioEvent[]; savedKeys: Set<string>; busy: boolean}>();
+const props = defineProps<{
+  events: AudioEvent[];
+  savedKeys: Set<string>;
+  busy: boolean;
+  recentCaptureEnabled: boolean;
+  recentCaptureAvailable: boolean;
+}>();
 const emit = defineEmits<{
   save: [payload: {stableKey: string}];
   play: [payload: {stableKey: string}];
   setLock: [payload: {locked: boolean; category: string; query: string}];
+  setCapture: [payload: {enabled: boolean}];
 }>();
 const query = shallowRef('');
 const category = shallowRef('all');
@@ -74,7 +81,18 @@ const visibleEvents = computed(() => {
   <section class="event-browser">
     <header class="section-heading">
       <div><span class="eyebrow">{{ t('recent.eyebrow') }}</span><h2>{{ t('recent.title') }}</h2></div>
-      <el-tag effect="plain">{{ t('common.entries', {count: visibleEvents.length}) }}</el-tag>
+      <div class="capture-toggle">
+        <span>{{ !props.recentCaptureAvailable ? t('recent.captureNeedsReset') : props.recentCaptureEnabled ? t('recent.captureOn') : t('recent.captureOff') }}</span>
+        <el-tooltip :content="props.recentCaptureAvailable ? t('recent.captureAria') : t('recent.captureNeedsReset')">
+          <el-switch
+            :model-value="props.recentCaptureEnabled"
+            :disabled="busy || !props.recentCaptureAvailable"
+            :aria-label="t('recent.captureAria')"
+            @update:model-value="(enabled: boolean) => emit('setCapture', {enabled})"
+          />
+        </el-tooltip>
+        <el-tag effect="plain">{{ t('common.entries', {count: visibleEvents.length}) }}</el-tag>
+      </div>
     </header>
     <div class="toolbar">
       <div class="search-lock">
@@ -130,6 +148,7 @@ const visibleEvents = computed(() => {
 .section-heading, .event-row, .event-actions, .event-key { display: flex; align-items: center; }
 .section-heading, .event-row { justify-content: space-between; }
 .section-heading { gap: 12px; margin-bottom: 14px; }
+.capture-toggle { display: flex; align-items: center; gap: 8px; color: var(--vc-muted); font-size: 12px; }
 .section-heading h2 { margin: 3px 0 0; font-size: 17px; letter-spacing: 0; }
 .eyebrow, .event-source, .event-meta { color: var(--vc-muted); font-size: 12px; }
 .toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 150px; gap: 8px; margin-bottom: 12px; }

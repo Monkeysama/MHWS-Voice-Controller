@@ -38,9 +38,12 @@ const visibleEvents = computed(() => controller.events.value);
           :events="visibleEvents"
           :saved-keys="savedKeys"
           :busy="controller.busy.value"
+          :recent-capture-enabled="controller.state.value?.status?.recentCaptureEnabled ?? false"
+          :recent-capture-available="typeof controller.state.value?.status?.recentCaptureEnabled === 'boolean'"
           @save="controller.saveEvent"
           @play="controller.playEvent"
           @set-lock="controller.setRecentLock"
+          @set-capture="controller.setRecentCapture"
         />
       </el-tab-pane>
       <el-tab-pane :label="t('tabs.saved')" name="saved" class="saved-pane">

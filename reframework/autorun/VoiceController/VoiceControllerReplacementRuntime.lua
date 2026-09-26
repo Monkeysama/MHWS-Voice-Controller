@@ -64,6 +64,15 @@ function Runtime.refresh_preflight(compiled, check_fn)
     return all_ready
 end
 
+-- 关闭近期事件采集时，判断当前稳定键是否仍需解析主动作以完成候选匹配。
+function Runtime.needs_action_context(compiled, event_id, trigger_id)
+    if not compiled or not compiled.enabled then return false end
+    if compiled.kind == "v2" then
+        return RuleSet.needs_action_context(compiled.rule_set, event_id, trigger_id)
+    end
+    return false
+end
+
 local function find_rule(compiled, event_id, trigger_id, observed_actions)
     if not compiled or not compiled.enabled then return nil end
     if compiled.kind == "v2" then

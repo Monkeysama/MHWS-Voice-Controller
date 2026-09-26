@@ -2,7 +2,7 @@
 -- 在 REFramework Lua 线程观察自然音频事件；仅对精确匹配且替换音频已入队的请求执行配置的抑制策略。
 -- 日志资源由本脚本独占写入，使用固定容量文本避免无限增长。
 
-local VERSION = "audio-probe-v30"
+local VERSION = "audio-probe-v31"
 local ROOT = "VoiceController\\"
 local LOG = ROOT .. "audio_probe.log"
 local MAX_LINES = 1200
@@ -46,6 +46,8 @@ local browser_weapon_events = EventStore.new(120)
 local browser_unknown_events = EventStore.new(120)
 local browser_locked_events = EventStore.new(120)
 local recent_lock = {locked = false, category = "all", query = ""}
+-- 近期事件采集默认关闭；关闭时仍保留分组替换 Hook，但不建立近期列表和重放解析。
+local recent_capture_enabled = false
 local game_audio_replay = GameAudioReplay.new()
 local saved_event_store = nil
 local saved_event_error = nil
@@ -828,10 +830,7 @@ end
 local function enqueue_request(request, origin)
     if request == nil then return end
     if GameAudioReplay.is_active(game_audio_replay) then return end
-    if #pending >= 256 then
-        dropped_pending = dropped_pending + 1
-        return
-    end
+    local capture_enabled = recent_capture_enabled == true
 
     local function read(name, fallback)
         local ok, value = pcall(request.call, request, name)
@@ -870,23 +869,36 @@ local function enqueue_request(request, origin)
 
     local event_id = read("get_EventId")
     local trigger_id = read("get_TriggerId")
-    local source_path = voice_index[event_id .. ":" .. trigger_id]
-    local container = read_object("get_Container")
-    local source_game_object = read_value("get_SrcGameObj")
-    local target_game_object = read_value("get_TargetGameObj")
-    local source_object = read_game_object("get_SrcGameObj")
-    local target_object = read_game_object("get_TargetGameObj")
-    if is_blocked_source(source_object) then return end
-    local category = classify_audio_event(source_path, source_object)
-    -- 已收藏的未分类音效也要观察动作；其他未分类音效避免扫描高频临时来源。
     local stable_key = event_id .. ":" .. trigger_id
-    local is_saved_event = saved_event_keys[stable_key] == true
-    local should_capture_action = category ~= "unknown" or is_saved_event
+    local replacement_context = origin == "SoundManager.postRequestInfo"
+        and replacement_runtime.enabled == true
+    local needs_replacement_action = replacement_context
+        and ReplacementRuntime.needs_action_context(replacement_runtime, event_id, trigger_id)
+    local read_scene_context = capture_enabled or replacement_context or needs_replacement_action
+    local source_path = capture_enabled and voice_index[stable_key] or nil
+    local container = "?"
+    local source_game_object = nil
+    local target_game_object = nil
+    local source_object = "?"
+    local target_object = "?"
+    if read_scene_context then
+        container = read_object("get_Container")
+        source_game_object = read_value("get_SrcGameObj")
+        target_game_object = read_value("get_TargetGameObj")
+        source_object = read_game_object("get_SrcGameObj")
+        target_object = read_game_object("get_TargetGameObj")
+    end
+    if is_blocked_source(source_object) then return end
+    local category = capture_enabled and classify_audio_event(source_path, source_object) or "unknown"
+    -- 已收藏的未分类音效也要观察动作；其他未分类音效避免扫描高频临时来源。
+    local is_saved_event = capture_enabled and saved_event_keys[stable_key] == true
+    local should_capture_action = needs_replacement_action
+        or (capture_enabled and (category ~= "unknown" or is_saved_event))
     local observed_actions, action_reason = nil, nil
     if should_capture_action then
         observed_actions, action_reason = capture_action_context(source_game_object)
         -- 每个稳定键只记录一次失败原因；日志排队到帧线程，Hook 不访问磁盘。
-        if is_saved_event and not observed_actions and action_diagnostic_count < 64
+        if capture_enabled and is_saved_event and not observed_actions and action_diagnostic_count < 64
             and not action_diagnostics[stable_key] then
             action_diagnostics[stable_key] = true
             action_diagnostic_count = action_diagnostic_count + 1
@@ -895,10 +907,15 @@ local function enqueue_request(request, origin)
                 "\tsource=" .. tostring(source_object))
         end
     end
-    enable_duration_callback(request)
-    next_sequence = next_sequence + 1
-    local replayable = GameAudioReplay.capture(game_audio_replay, request)
-    register_scene_container(read_value("get_Container"), read_value("get_SrcGameObj"))
+    if capture_enabled then enable_duration_callback(request) end
+    local next_event_sequence = nil
+    local replayable = false
+    if capture_enabled then
+        next_sequence = next_sequence + 1
+        next_event_sequence = next_sequence
+        replayable = GameAudioReplay.capture(game_audio_replay, request)
+        register_scene_container(read_value("get_Container"), read_value("get_SrcGameObj"))
+    end
 
     local replacement = nil
     local replacement_queued = false
@@ -933,6 +950,17 @@ local function enqueue_request(request, origin)
         end
     end
 
+    -- 关闭近期采集时到此结束；上面的替换分发和原声抑制逻辑仍然有效。
+    if not capture_enabled then
+        return stable_key, replacement and replacement.result or nil,
+            replacement_queued, matched_strategy, replacement ~= nil
+    end
+    if #pending >= 256 then
+        dropped_pending = dropped_pending + 1
+        return stable_key, replacement and replacement.result or nil,
+            replacement_queued, matched_strategy, replacement ~= nil
+    end
+
     local action_keys = {}
     for _, action in ipairs(observed_actions or {}) do
         action_keys[#action_keys + 1] = ActionContext.key(action)
@@ -948,7 +976,7 @@ local function enqueue_request(request, origin)
     pending[#pending + 1] = {
         message = message,
         event = {
-            sequence = next_sequence,
+            sequence = next_event_sequence,
             stableKey = event_id .. ":" .. trigger_id,
             origin = origin or "?",
             category = category,
@@ -1720,12 +1748,30 @@ local function find_recent_event_by_key(stable_key)
     return found
 end
 
+-- 重建近期采集窗口；开关切换后不保留旧事件和旧的触发次数。
+local function reset_recent_capture_window()
+    pending = {}
+    recent_events = EventStore.new(RECENT_CAPACITY)
+    browser_player_events = EventStore.new(120)
+    browser_npc_events = EventStore.new(120)
+    browser_otomo_events = EventStore.new(120)
+    browser_weapon_events = EventStore.new(120)
+    browser_unknown_events = EventStore.new(120)
+    browser_locked_events = EventStore.new(120)
+    next_sequence = 0
+    total_captured = 0
+    voice_captured = 0
+    unknown_captured = 0
+    dropped_pending = 0
+end
+
 -- REFF 服务通过窄接口读取帧线程状态并提交配置事务；网页无法访问 Hook 或运行时对象。
 local reff_handle, reff_error = VoiceControllerREFF.register({
     get_status = function()
         local audio = REFAudioClient.get_status(replacement_client)
         return {
             hooksReady = hook_installed and request_hook_installed and playing_pair_hook_installed,
+            recentCaptureEnabled = recent_capture_enabled,
             totalCaptured = total_captured,
             droppedPending = dropped_pending,
             voiceIndexReady = voice_index_ready,
@@ -1750,6 +1796,7 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
         }
     end,
     get_recent_events = function()
+        if not recent_capture_enabled then return {} end
         local result = {}
         -- 页面只读取当前视图窗口；分类切换和锁定条件变化都会在服务端重建该窗口。
         local stores = {browser_locked_events}
@@ -1781,6 +1828,14 @@ local reff_handle, reff_error = VoiceControllerREFF.register({
         queue_runtime_message(string.format(
             "RECENT_LOCK\tenabled=%s\tcategory=%s\tquery=%s",
             tostring(recent_lock.locked), recent_lock.category, recent_lock.query))
+        return true
+    end,
+    set_recent_capture = function(enabled)
+        enabled = enabled == true
+        if recent_capture_enabled == enabled then return true end
+        recent_capture_enabled = enabled
+        reset_recent_capture_window()
+        queue_runtime_message("RECENT_CAPTURE	enabled=" .. tostring(enabled))
         return true
     end,
     get_saved_events = function()

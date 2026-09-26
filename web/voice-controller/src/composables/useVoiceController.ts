@@ -168,6 +168,7 @@ export function useVoiceController() {
     updateSavedEventNote: (params: Record<string, unknown>) => mutate('voice-controller.update-saved-event-note', params),
     playEvent: (params: Record<string, unknown>) => mutate('voice-controller.play-event', params),
     setRecentLock: (params: Record<string, unknown>) => mutate('voice-controller.set-recent-lock', params),
+    setRecentCapture: (params: Record<string, unknown>) => mutate('voice-controller.set-recent-capture', params),
     addGroup: (params: Record<string, unknown>) => mutate('voice-controller.add-group', params),
     updateGroup: (params: Record<string, unknown>) => mutate('voice-controller.update-group', params),
     updateBlockedSources: (params: Record<string, unknown>) => mutate('voice-controller.update-blocked-sources', params),

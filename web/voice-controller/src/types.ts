@@ -97,6 +97,7 @@ export interface AudioCatalog {
 
 export interface RuntimeStatus {
   hooksReady: boolean;
+  recentCaptureEnabled: boolean;
   totalCaptured: number;
   droppedPending: number;
   voiceIndexReady: boolean;

@@ -20,6 +20,8 @@ const messages = {
     },
     recent: {
       eyebrow: '自然游戏流程', title: '近期音频事件', search: '事件键、来源或资源路径',
+      captureOn: '实时采集中', captureOff: '实时采集已停止', captureAria: '开启或停止近期事件实时采集',
+      captureNeedsReset: '脚本服务未更新，请执行 Script Reset',
       lock: '锁定当前分类和搜索条件', unlock: '解除锁定并重新记录全部匹配事件',
       lockAria: '锁定近期事件条件', unlockAria: '解除近期事件锁定', categoryAria: '事件类别',
       triggered: '触发 {count} 次', latest: '最近 #{sequence}', play: '播放游戏内音频',
@@ -77,6 +79,8 @@ const messages = {
     },
     recent: {
       eyebrow: 'Natural Gameplay', title: 'Recent Audio Events', search: 'Event key, source, or resource path',
+      captureOn: 'Live capture on', captureOff: 'Live capture off', captureAria: 'Enable or disable live recent-event capture',
+      captureNeedsReset: 'Script service is outdated. Run Script Reset.',
       lock: 'Lock the current category and search', unlock: 'Unlock and start a new matching event window',
       lockAria: 'Lock recent event filter', unlockAria: 'Unlock recent event filter', categoryAria: 'Event category',
       triggered: 'Triggered {count} times', latest: 'Latest #{sequence}', play: 'Play in-game audio',
