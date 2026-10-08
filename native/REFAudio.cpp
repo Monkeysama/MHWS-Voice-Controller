@@ -9,6 +9,8 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
+#include <cstring>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -37,6 +39,9 @@ struct BassVector {
     float y{};
     float z{};
 };
+
+// BASS 的声道信息 ABI；filename 指针由 BASS 拥有，调用方只读取标量。
+struct BassChannelInfo { DWORD freq, chans, flags, ctype, origres, plugin, sample; const char* filename; };
 
 using BASS_Init_t = BOOL(WINAPI*)(int, DWORD, DWORD, HWND, void*);
 using BASS_Free_t = BOOL(WINAPI*)();
@@ -72,6 +77,8 @@ struct BassApi {
     BASS_ErrorGetCode_t error{};
     BASS_StreamCreateFile_t create_stream{};
     BASS_StreamFree_t free_stream{};
+    BOOL (WINAPI* info)(DWORD, BassChannelInfo*){};
+    DWORD (WINAPI* data)(DWORD, void*, DWORD){};
     BASS_ChannelPlay_t play{};
     BASS_ChannelPause_t pause{};
     BASS_ChannelStop_t stop{};
@@ -99,6 +106,8 @@ struct BassApi {
         BASS_LOAD(error, "BASS_ErrorGetCode");
         BASS_LOAD(create_stream, "BASS_StreamCreateFile");
         BASS_LOAD(free_stream, "BASS_StreamFree");
+        BASS_LOAD(info, "BASS_ChannelGetInfo");
+        BASS_LOAD(data, "BASS_ChannelGetData");
         BASS_LOAD(play, "BASS_ChannelPlay");
         BASS_LOAD(pause, "BASS_ChannelPause");
         BASS_LOAD(stop, "BASS_ChannelStop");
@@ -127,6 +136,7 @@ struct AudioChannel {
     float speed{1.0f};
     double max_duration{};
     bool spatial{};
+    std::shared_ptr<std::vector<unsigned char>> mono_wave;
 };
 
 HINSTANCE g_module{};
@@ -399,6 +409,57 @@ void write_utf8_audio_catalog(BassApi& bass,
     write_text_atomic(output_path, output.str());
 }
 
+// 在音频工作线程解码并平均混合所有声道；WAV 内存由通道拥有，释放 BASS 流后释放。
+// 转换结果限制为 32 MiB，不修改素材文件，也不在游戏 Hook 线程解码。
+DWORD create_mono_spatial(BassApi& bass, const std::filesystem::path& path,
+    AudioChannel& channel, std::string& error) {
+    DWORD decoder = bass.create_stream(FALSE, path.c_str(), 0, 0, BASS_UNICODE | BASS_STREAM_DECODE);
+    if (!decoder) { error = "bass_decode_" + std::to_string(bass.error()); return 0; }
+    BassChannelInfo info{};
+    if (!bass.info(decoder, &info) || !info.chans || info.chans > 32 || !info.freq) {
+        bass.free_stream(decoder); error = "invalid_channel_info"; return 0;
+    }
+    if (info.chans == 1) {
+        bass.free_stream(decoder);
+        DWORD stream = bass.create_stream(FALSE, path.c_str(), 0, 0,
+            BASS_UNICODE | BASS_SAMPLE_3D | BASS_SAMPLE_OVER_VOL);
+        if (!stream) error = "bass_" + std::to_string(bass.error());
+        return stream;
+    }
+    auto wave = std::make_shared<std::vector<unsigned char>>(44, 0);
+    std::vector<short> buffer(4096 * info.chans);
+    bool failed = false;
+    while (true) {
+        DWORD bytes = bass.data(decoder, buffer.data(), static_cast<DWORD>(buffer.size() * 2));
+        if (bytes == DWORD(-1)) { failed = bass.error() != 45; break; }
+        if (!bytes) break;
+        if (bytes % (info.chans * 2)) { failed = true; break; }
+        auto frames = bytes / (info.chans * 2);
+        if (wave->size() + frames * 2 > 32 * 1024 * 1024) {
+            bass.free_stream(decoder); error = "spatial_audio_too_large"; return 0;
+        }
+        for (std::size_t frame = 0; frame < frames; ++frame) {
+            int sum = 0;
+            for (DWORD c = 0; c < info.chans; ++c) sum += buffer[frame * info.chans + c];
+            short sample = static_cast<short>(sum / static_cast<int>(info.chans));
+            wave->push_back(static_cast<unsigned char>(sample & 255));
+            wave->push_back(static_cast<unsigned char>((sample >> 8) & 255));
+        }
+    }
+    bass.free_stream(decoder);
+    if (failed || wave->size() == 44) { error = "decode_failed"; return 0; }
+    auto put = [&](std::size_t at, DWORD value, std::size_t count) {
+        for (std::size_t i = 0; i < count; ++i) (*wave)[at + i] = static_cast<unsigned char>(value >> (8 * i));
+    };
+    memcpy(wave->data(), "RIFF", 4); put(4, static_cast<DWORD>(wave->size() - 8), 4);
+    memcpy(wave->data() + 8, "WAVEfmt ", 8); put(16, 16, 4); put(20, 1, 2); put(22, 1, 2);
+    put(24, info.freq, 4); put(28, info.freq * 2, 4); put(32, 2, 2); put(34, 16, 2);
+    memcpy(wave->data() + 36, "data", 4); put(40, static_cast<DWORD>(wave->size() - 44), 4);
+    DWORD stream = bass.create_stream(TRUE, wave->data(), 0, wave->size(), BASS_SAMPLE_3D | BASS_SAMPLE_OVER_VOL);
+    if (stream) channel.mono_wave = std::move(wave);
+    else error = "bass_mono_" + std::to_string(bass.error());
+    return stream;
+}
 // 在指定通道加载并立即播放文件；错误通过字符串返回，由工作线程统一写状态。
 bool load_channel(BassApi& bass, const std::filesystem::path& data_dir,
     const std::string& relative_name, float volume, float speed,
@@ -414,11 +475,9 @@ bool load_channel(BassApi& bass, const std::filesystem::path& data_dir,
     }
     const auto path = data_dir / relative_path;
     // 允许 VoiceController 在受限范围内对偏小的外部素材施加数字增益。
-    const DWORD flags = BASS_UNICODE | BASS_SAMPLE_OVER_VOL |
-        (spatial ? (BASS_SAMPLE_3D | BASS_SAMPLE_MONO) : 0);
-    channel.stream = bass.create_stream(FALSE, path.c_str(), 0, 0, flags);
+    channel.stream = spatial ? create_mono_spatial(bass, path, channel, error) : bass.create_stream(FALSE, path.c_str(), 0, 0, BASS_UNICODE | BASS_SAMPLE_OVER_VOL);
     if (!channel.stream) {
-        error = "bass_" + std::to_string(bass.error());
+        if (error.empty()) error = "bass_" + std::to_string(bass.error());
         return false;
     }
     if (!bass.get_attribute(channel.stream, BASS_ATTRIB_FREQ,
@@ -444,14 +503,16 @@ bool load_channel(BassApi& bass, const std::filesystem::path& data_dir,
         bass.apply_3d();
     }
     if (!bass.play(channel.stream, TRUE)) {
-        error = "bass_" + std::to_string(bass.error());
+        if (error.empty()) error = "bass_" + std::to_string(bass.error());
         free_channel(bass, channel);
         return false;
     }
     return true;
 }
 
-// 输出全部通道的轻量状态快照；第一行之外不承担命令确认语义。
+#include "REFAudioMailboxes.inl"
+
+// 输出旧入口通道的轻量状态快照，不承担新客户端的命令确认语义。
 void write_channels_status(BassApi& bass,
     const std::map<std::uint32_t, AudioChannel>& channels,
     const std::filesystem::path& path) {
@@ -495,8 +556,19 @@ void run_audio_worker() {
     DeleteFileW(command_path.c_str());
     DeleteFileW(utf8_command_path.c_str());
     DeleteFileW(utf8_response_path.c_str());
-    write_text(backend_path,
-        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1\tspatial_batch=1");
+    const std::string boot = std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64());
+    std::error_code mailbox_ec;
+    std::filesystem::create_directories(base_dir / L"clients", mailbox_ec);
+    for (const auto& entry : std::filesystem::directory_iterator(base_dir / L"clients", mailbox_ec)) {
+        if (!entry.is_directory(mailbox_ec) || entry.is_symlink(mailbox_ec) || !mailbox_id(wide_to_utf8(entry.path().filename().wstring()))) continue;
+        DeleteFileW((entry.path() / L"command.txt").c_str());
+        DeleteFileW((entry.path() / L"response.txt").c_str());
+        DeleteFileW((entry.path() / L"state.txt").c_str());
+    }
+    std::map<std::string, MailboxClient> mailboxes;
+    const std::string backend_marker =
+        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1\tspatial_batch=1\tclient_mailboxes=1\tclient_protocol=1\tmax_clients=16\tspatial_downmix=1\tboot_id=" + boot;
+    DeleteFileW(backend_path.c_str());
     BassApi bass;
     if (!bass.load(base_dir / L"REFAudio_BASS.dll")) {
         write_status(status_path, "error", "bass_dll_load");
@@ -509,6 +581,7 @@ void run_audio_worker() {
         CloseHandle(mutex);
         return;
     }
+    write_text_atomic(backend_path, backend_marker);
     write_utf8_audio_catalog(bass, data_dir, catalog_path);
 
     std::map<std::uint32_t, AudioChannel> channels;
@@ -563,6 +636,11 @@ void run_audio_worker() {
                 if (action == "stop_all") {
                     for (auto& [_, channel] : channels) free_channel(bass, channel);
                     channels.clear();
+                    // 旧 stop_all 保持真正全局停止；新客户端只能 stop_client。
+                    for (auto& [_, client] : mailboxes) {
+                        for (auto& [id, channel] : client.channels) { free_channel(bass, channel); client.states[id] = "stopped"; }
+                        client.channels.clear();
+                    }
                 } else if (action == "ensure_dir") {
                     if (parts.size() >= 5) {
                         std::string error;
@@ -573,7 +651,9 @@ void run_audio_worker() {
                     const std::size_t path_index = channelized ? 4 : 3;
                     if ((!channelized && parts.size() >= 6) || channelized_load) {
                         const bool new_channel = channels.find(channel_id) == channels.end();
-                        if (new_channel && channels.size() >= MAX_CHANNELS) {
+                        std::size_t occupied = channels.size();
+                        for (const auto& [_, client] : mailboxes) occupied += client.channels.size();
+                        if (new_channel && occupied >= MAX_CHANNELS) {
                             write_status(status_path, "error", "channel_limit");
                         } else {
                             auto& channel = channels[channel_id];
@@ -702,6 +782,7 @@ void run_audio_worker() {
                 active == BASS_ACTIVE_PAUSED ? "paused" : "stopped";
             write_status(status_path, state, std::to_string(seconds));
         }
+        poll_mailboxes(bass, base_dir, data_dir, boot, mailboxes, channels.size());
         write_channels_status(bass, channels, channels_path);
         const auto current_time = std::chrono::steady_clock::now();
         if (current_time >= next_catalog_scan) {
@@ -713,6 +794,7 @@ void run_audio_worker() {
 
     for (auto& [_, channel] : channels) free_channel(bass, channel);
     channels.clear();
+    for (auto& [_, client] : mailboxes) for (auto& [id, channel] : client.channels) free_channel(bass, channel);
     bass.free();
     write_status(status_path, "stopped", "0");
     CloseHandle(mutex);
