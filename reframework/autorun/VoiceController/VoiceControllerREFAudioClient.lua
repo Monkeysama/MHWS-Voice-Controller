@@ -12,6 +12,7 @@ local MAX_SPATIAL_UPDATES_PER_TICK = 4
 local DISTANCE_REFERENCE = 1.5
 local DISTANCE_MAX = 40.0
 local DISTANCE_ROLLOFF = 1.0
+local DEFAULT_MIN_VOLUME_PERCENT = 65
 local check_backend
 
 local function read_all(path)
@@ -99,7 +100,26 @@ local function read_spatial_state(spec)
     }
 end
 
--- 计算线性距离衰减；不改变规则音量上限，超出最大距离时静音。
+-- 帧线程读取候选音量下限；比例相对于设定音量，缺省或非法值回退 65%。
+local function minimum_gain(spec)
+    local percent = tonumber(spec.min_volume_percent)
+    if not percent or percent ~= percent or percent < 0 or percent > 100 then
+        percent = DEFAULT_MIN_VOLUME_PERCENT
+    end
+    return percent / 100
+end
+
+-- BASS 默认反比距离衰减在 max_distance 停止下降；缩短边界实现音量下限，保留 3D 方位和批量坐标更新。
+-- 不预先乘距离增益，避免 BASS 再次衰减；0% 沿用原来的最大距离。
+local function spatial_max_distance(spec)
+    local reference = math.max(0.01, tonumber(spec.reference_distance) or DISTANCE_REFERENCE)
+    local maximum = math.max(reference, tonumber(spec.max_distance) or DISTANCE_MAX)
+    local floor = minimum_gain(spec)
+    if floor > 0 then maximum = math.min(maximum, reference / floor) end
+    return maximum
+end
+
+-- 计算反比距离衰减；二维回退路径在远距离仍保留候选指定比例，设定音量为零时继续静音。
 local function apply_distance_attenuation(spec)
     local volume = tonumber(spec.volume) or 1.5
     if spec.distance_enabled ~= true then return volume end
@@ -111,10 +131,11 @@ local function apply_distance_attenuation(spec)
     local reference = tonumber(spec.reference_distance) or DISTANCE_REFERENCE
     local maximum = tonumber(spec.max_distance) or DISTANCE_MAX
     local rolloff = tonumber(spec.rolloff) or DISTANCE_ROLLOFF
-    if distance >= maximum then return 0 end
+    local floor = minimum_gain(spec)
+    if distance >= maximum then return volume * floor end
     if distance <= reference then return volume end
     local attenuation = reference / (reference + rolloff * (distance - reference))
-    return volume * math.max(0, math.min(1, attenuation))
+    return volume * math.max(floor, math.min(1, attenuation))
 end
 
 -- 创建单写者客户端；通道 ID 使用独立高位区间，避免与手工测试通道冲突。
@@ -318,7 +339,7 @@ function Client.tick(client, now)
                 clean_field((spec.max_duration_ms or 0) / 1000),
                 clean_field(spatial.source[1]), clean_field(spatial.source[2]), clean_field(spatial.source[3]),
                 clean_field(spec.reference_distance or DISTANCE_REFERENCE),
-                clean_field(spec.max_distance or DISTANCE_MAX),
+                clean_field(spatial_max_distance(spec)),
                 clean_field(spatial.listener[1]), clean_field(spatial.listener[2]), clean_field(spatial.listener[3]),
                 clean_field(spatial.front[1]), clean_field(spatial.front[2]), clean_field(spatial.front[3]),
                 clean_field(spatial.top[1]), clean_field(spatial.top[2]), clean_field(spatial.top[3])

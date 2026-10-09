@@ -233,6 +233,7 @@ local function normalize_rule(folder, raw_rule, index, errors)
                 action = candidate.action and ActionContext.normalize(candidate.action) or action,
                 weight = candidate.weight,
                 volume = candidate.volume,
+                minVolumePercent = candidate.minVolumePercent,
                 speed = candidate.speed,
                 maxDurationMs = candidate.maxDurationMs
             }
@@ -346,6 +347,7 @@ function GroupStore.to_document(group, default_replace_strategy)
                         or (rule.action and ActionContext.normalize(rule.action)),
                     weight = candidate.weight,
                     volume = candidate.volume,
+                    minVolumePercent = candidate.minVolumePercent,
                     speed = candidate.speed,
                     maxDurationMs = candidate.maxDurationMs
                 }

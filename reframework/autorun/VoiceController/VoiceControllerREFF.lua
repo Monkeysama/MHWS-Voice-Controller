@@ -170,6 +170,7 @@ function Service.register(api, dependencies)
                 require_string(params, "file"), {
                     weight = params.weight,
                     volume = params.volume,
+                    min_volume_percent = params.minVolumePercent,
                     speed = params.speed,
                     max_duration_ms = params.maxDurationMs,
                     action_key = params.actionKey,
@@ -183,6 +184,7 @@ function Service.register(api, dependencies)
                     file = params.file,
                     weight = params.weight,
                     volume = params.volume,
+                    min_volume_percent = params.minVolumePercent,
                     speed = params.speed,
                     max_duration_ms = params.maxDurationMs,
                     action_key = params.actionKey,

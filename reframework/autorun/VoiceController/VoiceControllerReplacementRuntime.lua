@@ -86,6 +86,7 @@ local function candidate_for_v1(rule)
     return {
         file = rule.file,
         volume = rule.volume,
+        min_volume_percent = rule.min_volume_percent,
         speed = rule.speed,
         max_duration_ms = rule.max_duration_ms
     }
@@ -137,6 +138,7 @@ function Runtime.dispatch(compiled, event_id, trigger_id, now_ms, random_value, 
         stable_key = rule.stable_key,
         file = candidate.file,
         volume = candidate.volume,
+        min_volume_percent = candidate.min_volume_percent,
         speed = candidate.speed,
         max_duration_ms = candidate.max_duration_ms,
         group_id = rule.group_id,

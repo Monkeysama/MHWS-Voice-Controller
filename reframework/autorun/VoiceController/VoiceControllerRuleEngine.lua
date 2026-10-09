@@ -4,6 +4,7 @@
 local RuleEngine = {}
 
 local DEFAULT_VOLUME = 1.5
+local DEFAULT_MIN_VOLUME_PERCENT = 65
 local MAX_VOLUME = 5.0
 
 local function add_error(errors, code)
@@ -60,6 +61,10 @@ function RuleEngine.compile(config)
     local mode = config.mode or "observe"
     local file = normalize_audio_path(config.file)
     local volume = bounded_number(config.volume, DEFAULT_VOLUME, 0.0, MAX_VOLUME)
+    local min_volume_percent = config.minVolumePercent == nil and DEFAULT_MIN_VOLUME_PERCENT
+        or tonumber(config.minVolumePercent)
+    if min_volume_percent ~= nil and (min_volume_percent ~= min_volume_percent
+        or min_volume_percent < 0 or min_volume_percent > 100) then min_volume_percent = nil end
     local speed = bounded_number(config.speed, 1.0, 0.1, 8.0)
     local max_duration_ms = bounded_number(config.maxDurationMs, 0, 0, 3600000)
     local cooldown_ms = bounded_number(config.cooldownMs, 0, 0, 3600000)
@@ -80,6 +85,7 @@ function RuleEngine.compile(config)
         add_error(errors, "invalid_replace_strategy")
     end
     if volume == nil then add_error(errors, "invalid_volume") end
+    if min_volume_percent == nil then add_error(errors, "invalid_min_volume_percent") end
     if speed == nil then add_error(errors, "invalid_speed") end
     if max_duration_ms == nil then add_error(errors, "invalid_max_duration") end
     if cooldown_ms == nil then add_error(errors, "invalid_cooldown") end
@@ -97,6 +103,7 @@ function RuleEngine.compile(config)
         replace_strategy = config.replaceStrategy,
         file = file,
         volume = volume or DEFAULT_VOLUME,
+        min_volume_percent = min_volume_percent or DEFAULT_MIN_VOLUME_PERCENT,
         speed = speed or 1.0,
         max_duration_ms = max_duration_ms or 0,
         cooldown_ms = cooldown_ms or 0,

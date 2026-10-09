@@ -31,12 +31,13 @@ function update(patch: Record<string, unknown>) {
   emit('update', props.index, patch);
 }
 
-function updateNumber(field: 'weight' | 'volume' | 'speed' | 'maxDurationMs', value: number | undefined) {
+function updateNumber(field: 'weight' | 'volume' | 'minVolumePercent' | 'speed' | 'maxDurationMs', value: number | undefined) {
   if (value !== undefined) update({[field]: value});
 }
 
 const updateWeight = (value: number | undefined) => updateNumber('weight', value);
 const updateVolume = (value: number | undefined) => updateNumber('volume', value);
+const updateMinVolume = (value: number | undefined) => updateNumber('minVolumePercent', value);
 const updateSpeed = (value: number | undefined) => updateNumber('speed', value);
 const updateDuration = (value: number | undefined) => updateNumber('maxDurationMs', value);
 function formatDuration(durationMs?: number) {
@@ -87,6 +88,10 @@ function formatDuration(durationMs?: number) {
         <el-input-number :model-value="candidate.volume ?? 1.5" :min="0" :max="5" :step="0.05" :precision="2" controls-position="right" @change="updateVolume" />
       </label>
       <label>
+        <span :title="t('candidate.minVolumeHint')">{{ t('candidate.minVolumePercent') }}</span>
+        <el-input-number :model-value="candidate.minVolumePercent ?? 65" :min="0" :max="100" :step="1" :precision="0" controls-position="right" @change="updateMinVolume" />
+      </label>
+      <label>
         <span>{{ t('candidate.speed') }}</span>
         <el-input-number :model-value="candidate.speed ?? 1" :min="0.1" :max="8" :step="0.05" :precision="2" controls-position="right" @change="updateSpeed" />
       </label>
@@ -113,7 +118,7 @@ function formatDuration(durationMs?: number) {
 .candidate-actions { display: grid; grid-template-columns: auto 32px 32px; align-items: center; gap: 8px; }
 .candidate-actions :deep(.el-button) { width: 32px; height: 32px; margin: 0; padding: 0; }
 .candidate-duration { display: flex; height: 32px; align-items: center; color: var(--vc-muted); white-space: nowrap; }
-.candidate-fields { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 9px; margin-top: 10px; }
+.candidate-fields { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 9px; margin-top: 10px; }
 .candidate-fields label { min-width: 0; }
 .candidate-fields label > span { display: block; margin-bottom: 5px; color: var(--vc-muted); font-size: 11px; }
 .candidate-fields :deep(.el-input-number) { width: 100%; }

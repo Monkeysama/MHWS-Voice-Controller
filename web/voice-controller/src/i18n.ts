@@ -53,7 +53,7 @@ const messages = {
       strategy: '抑制策略', skipOriginal: '跳过原始请求', stopPlayingId: '停止 PlayingId', cooldown: '冷却 ms',
       maxConcurrent: '最大并发', addAudio: '添加目录中的音频', addCandidate: '添加候选', remove: '删除规则',
     },
-    candidate: {preview: '试听候选', remove: '删除候选', weight: '权重', volume: '音量', speed: '速度', maxDuration: '最大时长 ms'},
+    candidate: {preview: '试听候选', remove: '删除候选', weight: '权重', volume: '音量', minVolumePercent: '最大衰减（%）', minVolumeHint: '远距离时最低保留的音量比例；65% 表示至少保留设定音量的 65%，0% 不额外限制距离衰减，100% 不随距离衰减。', speed: '速度', maxDuration: '最大时长 ms'},
     saveBar: {
       dirty: '有未保存修改', synced: '配置已同步', reloadHint: '从磁盘重新加载配置；未保存修改将被丢弃',
       reload: '重新加载配置', save: '保存配置', saved: '配置已保存', reloaded: '配置已重新加载', previewQueued: '试听请求已排队',
@@ -112,7 +112,7 @@ const messages = {
       strategy: 'Suppression Strategy', skipOriginal: 'Skip original request', stopPlayingId: 'Stop PlayingId', cooldown: 'Cooldown ms',
       maxConcurrent: 'Max Concurrent', addAudio: 'Add audio from the folder', addCandidate: 'Add Candidate', remove: 'Delete Rule',
     },
-    candidate: {preview: 'Preview candidate', remove: 'Delete candidate', weight: 'Weight', volume: 'Volume', speed: 'Speed', maxDuration: 'Max duration ms'},
+    candidate: {preview: 'Preview candidate', remove: 'Delete candidate', weight: 'Weight', volume: 'Volume', minVolumePercent: 'Minimum volume (%)', minVolumeHint: 'Minimum retained volume at a distance. 65% keeps at least 65% of the configured volume; 0% adds no minimum; 100% disables distance attenuation.', speed: 'Speed', maxDuration: 'Max duration ms'},
     saveBar: {
       dirty: 'Unsaved changes', synced: 'Configuration synced', reloadHint: 'Reload configuration from disk and discard unsaved changes',
       reload: 'Reload Configuration', save: 'Save Configuration', saved: 'Configuration saved', reloaded: 'Configuration reloaded', previewQueued: 'Preview request queued',

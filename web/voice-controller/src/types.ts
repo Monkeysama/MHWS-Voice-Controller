@@ -6,6 +6,7 @@ export interface AudioCandidate {
   action?: AudioAction;
   weight?: number;
   volume?: number;
+  minVolumePercent?: number;
   speed?: number;
   maxDurationMs?: number;
 }

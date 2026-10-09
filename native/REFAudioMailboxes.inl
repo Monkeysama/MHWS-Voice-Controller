@@ -26,6 +26,34 @@ bool mailbox_request_id(const std::string& text, unsigned long long& id) {
     try { id = std::stoull(text); return true; } catch (...) { return false; }
 }
 
+// 独立邮箱的 3D 坐标只接受有限数值，防止 NaN/无穷值进入 BASS 的空间计算。
+bool mailbox_vector(const std::vector<std::string>& fields, std::size_t index,
+    BassVector& result, double limit) {
+    if (fields.size() <= index + 2) return false;
+    double values[3]{};
+    for (int offset = 0; offset < 3; ++offset) {
+        try {
+            std::size_t count{};
+            values[offset] = std::stod(fields[index + offset], &count);
+            if (count != fields[index + offset].size() || !std::isfinite(values[offset]) ||
+                std::abs(values[offset]) > limit) return false;
+        } catch (...) { return false; }
+    }
+    result = {static_cast<float>(values[0]), static_cast<float>(values[1]),
+        static_cast<float>(values[2])};
+    return true;
+}
+
+// 监听器朝向必须非零、近似垂直；归一化后交给 BASS，坐标更新不重新加载流。
+bool mailbox_basis(BassVector& front, BassVector& top) {
+    auto length = [](const BassVector& v) { return std::sqrt(v.x*v.x + v.y*v.y + v.z*v.z); };
+    const float fl = length(front), tl = length(top);
+    if (fl < .001f || tl < .001f || std::abs(front.x*top.x + front.y*top.y + front.z*top.z) / (fl*tl) > .15f) return false;
+    front = {front.x/fl, front.y/fl, front.z/fl};
+    top = {top.x/tl, top.y/tl, top.z/tl};
+    return true;
+}
+
 // 状态逐行包含 boot/session/local_channel/state/seconds/error，自然结束保留 ended。
 void write_mailbox_state(BassApi& bass, MailboxClient& client, const std::filesystem::path& dir, const std::string& boot) {
     std::ostringstream out;
@@ -97,8 +125,12 @@ void poll_mailboxes(BassApi& bass, const std::filesystem::path& base, const std:
             client.highest = request;
             const auto& action = fields[3];
             auto found = client.channels.find(local);
-            double volume, speed, duration;
-            if (action == "load" && fields.size() == 9) {
+            double volume, speed, duration, reference_distance, max_distance;
+            BassVector source{}, listener{}, front{}, top{};
+            const bool spatial_load = action == "load3d";
+            const bool valid_load_shape = (action == "load" && fields.size() == 9) ||
+                (spatial_load && fields.size() == 23);
+            if (valid_load_shape) {
                 auto relative = std::filesystem::path(utf8_to_wide(fields[5]));
                 int valid_utf8 = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, fields[5].data(), static_cast<int>(fields[5].size()), nullptr, 0);
                 bool unsafe = !valid_utf8 || !is_safe_relative_path(relative) || relative.has_root_name() || fields[5].find(':') != std::string::npos;
@@ -108,13 +140,22 @@ void poll_mailboxes(BassApi& bass, const std::filesystem::path& base, const std:
                 if (unsafe || ec || !is_safe_relative_path(within)) error = "invalid_path";
                 else if (!std::filesystem::is_regular_file(resolved, ec)) error = "file_not_found";
                 else if (!mailbox_number(fields[6], 0, 5, volume) || !mailbox_number(fields[7], .1, 8, speed) || !mailbox_number(fields[8], 0, 3600, duration)) error = "invalid_parameter";
+                else if (spatial_load && (!mailbox_vector(fields, 9, source, 1000000) ||
+                    !mailbox_number(fields[12], .01, 10000, reference_distance) ||
+                    !mailbox_number(fields[13], .01, 1000000, max_distance) ||
+                    max_distance < reference_distance || !mailbox_vector(fields, 14, listener, 1000000) ||
+                    !mailbox_vector(fields, 17, front, 2) || !mailbox_vector(fields, 20, top, 2) || !mailbox_basis(front, top))) error = "invalid_parameter";
                 else {
                     std::size_t count = legacy_count;
                     for (const auto& [_, c] : clients) count += c.channels.size();
                     if ((found == client.channels.end() && count >= MAX_CHANNELS) || (client.states.find(local) == client.states.end() && client.states.size() >= 64)) error = "channel_limit";
                     else {
                         auto& channel = client.channels[local];
-                        if (!load_channel(bass, data, fields[5], static_cast<float>(volume), static_cast<float>(speed), duration, false, nullptr, 1, 10000, channel, error)) client.channels.erase(local);
+                        if (spatial_load && !bass.set_listener_3d_position(&listener, nullptr, &front, &top)) error = "bass_listener_" + std::to_string(bass.error());
+                        if (error.empty() && !load_channel(bass, data, fields[5], static_cast<float>(volume), static_cast<float>(speed), duration,
+                            spatial_load, spatial_load ? &source : nullptr,
+                            spatial_load ? static_cast<float>(reference_distance) : 1.0f,
+                            spatial_load ? static_cast<float>(max_distance) : 10000.0f, channel, error)) client.channels.erase(local);
                         client.states[local] = error.empty() ? "playing" : "error";
                     }
                 }
@@ -131,6 +172,24 @@ void poll_mailboxes(BassApi& bass, const std::filesystem::path& base, const std:
                 else if (!mailbox_number(fields[5], 0, 5, volume)) error = "invalid_parameter";
                 else if (!bass.set_attribute(found->second.stream, BASS_ATTRIB_VOL, static_cast<float>(volume))) error = "bass_" + std::to_string(bass.error());
                 else found->second.volume = static_cast<float>(volume);
+            // 旧 17 字段坐标命令仍兼容；18 字段版本额外把应用层距离增益写入当前 BASS 流。
+            } else if (action == "position3d" && (fields.size() == 17 || fields.size() == 18)) {
+                if (!mailbox_vector(fields, 5, source, 1000000) || !mailbox_vector(fields, 8, listener, 1000000) ||
+                    !mailbox_vector(fields, 11, front, 2) || !mailbox_vector(fields, 14, top, 2) || !mailbox_basis(front, top) ||
+                    (fields.size() == 18 && !mailbox_number(fields[17], 0, 5, volume))) error = "invalid_parameter";
+                else if (found == client.channels.end()) {
+                    // 坐标命令与自然结束可并发：已结束的自有通道确认成功，不误报播放失败。
+                    if (client.states.find(local) == client.states.end() || client.states[local] != "ended") error = "channel_unknown";
+                } else if (!found->second.spatial) error = "channel_not_spatial";
+                else if (bass.active(found->second.stream)) {
+                    if (!bass.set_3d_position(found->second.stream, &source, nullptr, nullptr) ||
+                        !bass.set_listener_3d_position(&listener, nullptr, &front, &top) ||
+                        (fields.size() == 18 && !bass.set_attribute(found->second.stream, BASS_ATTRIB_VOL, static_cast<float>(volume)))) error = "bass_position_" + std::to_string(bass.error());
+                    else {
+                        if (fields.size() == 18) found->second.volume = static_cast<float>(volume);
+                        bass.apply_3d();
+                    }
+                }
             } else error = "unsupported_command";
         }
         if (client.states.find(local) != client.states.end()) client.errors[local] = error;

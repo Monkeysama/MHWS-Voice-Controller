@@ -6,6 +6,7 @@ local ActionContext = require("VoiceController/VoiceControllerActionContext")
 
 local MAX_CONCURRENT = 32
 local DEFAULT_VOLUME = 1.5
+local DEFAULT_MIN_VOLUME_PERCENT = 65
 local MAX_VOLUME = 5.0
 -- REFAudio 外部通道目前没有把自然结束回调传回 Lua；未指定最大时长时用短租约释放并发令牌，避免一次播放永久锁死规则。
 local DEFAULT_TOKEN_LEASE_MS = 2000
@@ -60,6 +61,10 @@ local function compile_candidate(candidate, defaults, errors, label)
     if candidate.action ~= nil and action == nil then add_error(errors, label .. ".invalid_action") end
     local weight = bounded_number(candidate.weight, 1.0, 0.000001, 1000000)
     local volume = bounded_number(candidate.volume, defaults.volume, 0.0, MAX_VOLUME)
+    local min_volume_percent = candidate.minVolumePercent == nil and defaults.min_volume_percent
+        or tonumber(candidate.minVolumePercent)
+    if min_volume_percent ~= nil and (min_volume_percent ~= min_volume_percent
+        or min_volume_percent < 0 or min_volume_percent > 100) then min_volume_percent = nil end
     local speed = bounded_number(candidate.speed, defaults.speed, 0.1, 8.0)
     local max_duration_ms = bounded_number(
         candidate.maxDurationMs, defaults.max_duration_ms, 0, 3600000)
@@ -67,6 +72,7 @@ local function compile_candidate(candidate, defaults, errors, label)
     if file == nil then add_error(errors, label .. ".invalid_audio_path") end
     if weight == nil then add_error(errors, label .. ".invalid_weight") end
     if volume == nil then add_error(errors, label .. ".invalid_volume") end
+    if min_volume_percent == nil then add_error(errors, label .. ".invalid_min_volume_percent") end
     if speed == nil then add_error(errors, label .. ".invalid_speed") end
     if max_duration_ms == nil then add_error(errors, label .. ".invalid_max_duration") end
 
@@ -76,6 +82,7 @@ local function compile_candidate(candidate, defaults, errors, label)
         action_key = ActionContext.key(action),
         weight = weight or 0,
         volume = volume or defaults.volume,
+        min_volume_percent = min_volume_percent or defaults.min_volume_percent,
         speed = speed or defaults.speed,
         max_duration_ms = max_duration_ms or defaults.max_duration_ms
     }
@@ -98,6 +105,7 @@ local function compile_rule(raw_rule, group, defaults, errors, index)
             file = raw_rule.file,
             weight = 1,
             volume = raw_rule.volume,
+            minVolumePercent = raw_rule.minVolumePercent,
             speed = raw_rule.speed,
             maxDurationMs = raw_rule.maxDurationMs
         }}
@@ -171,6 +179,7 @@ function RuleSet.compile(config)
         mode = mode,
         replace_strategy = config.replaceStrategy,
         volume = bounded_number(config.volume, DEFAULT_VOLUME, 0.0, MAX_VOLUME) or DEFAULT_VOLUME,
+        min_volume_percent = DEFAULT_MIN_VOLUME_PERCENT,
         speed = bounded_number(config.speed, 1.0, 0.1, 8.0) or 1.0,
         max_duration_ms = bounded_number(config.maxDurationMs, 0, 0, 3600000) or 0,
         cooldown_ms = bounded_number(config.cooldownMs, 0, 0, 3600000) or 0,

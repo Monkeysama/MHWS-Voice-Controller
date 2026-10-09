@@ -10,6 +10,7 @@ local Manager = {}
 local DEFAULT_GROUP_ID = "captured_audio"
 local DEFAULT_BLOCKED_SOURCE_PREFIXES = {"SoundLayerdRandomGenerator", "EnvPos"}
 local DEFAULT_VOLUME = 1.5
+local DEFAULT_MIN_VOLUME_PERCENT = 65
 
 -- 返回全新默认配置；用于正式包首次启动，调用方可安全修改而不会共享表引用。
 function Manager.default_config()
@@ -612,7 +613,8 @@ function Manager.add_rule_from_saved_event(manager, group_id, event, file, actio
         end
         local stable_key = event_id .. ":" .. trigger_id
         local candidate = {
-            file = catalog_file, weight = 1, volume = DEFAULT_VOLUME, speed = 1,
+            file = catalog_file, weight = 1, volume = DEFAULT_VOLUME,
+            minVolumePercent = DEFAULT_MIN_VOLUME_PERCENT, speed = 1,
             maxDurationMs = manager.catalog_duration_index[string.lower(catalog_file)] or 0,
             action = action
         }
@@ -706,6 +708,7 @@ function Manager.create_rule_from_event(manager, event, options)
                 file = catalog_file or requested_file,
                 weight = options.weight or 1,
                 volume = options.volume or DEFAULT_VOLUME,
+                minVolumePercent = options.min_volume_percent or DEFAULT_MIN_VOLUME_PERCENT,
                 speed = options.speed or 1,
                 maxDurationMs = options.max_duration_ms
                     or manager.catalog_duration_index[string.lower(catalog_file or requested_file)] or 0
@@ -744,6 +747,7 @@ function Manager.add_candidate(manager, group_id, rule_id, file, parameters)
             action = parameters.action,
             weight = parameters.weight or 1,
             volume = parameters.volume or DEFAULT_VOLUME,
+            minVolumePercent = parameters.min_volume_percent or DEFAULT_MIN_VOLUME_PERCENT,
             speed = parameters.speed,
             maxDurationMs = parameters.max_duration_ms
                 or manager.catalog_duration_index[string.lower(catalog_file or normalized)] or 0
@@ -773,6 +777,7 @@ function Manager.update_candidate(manager, group_id, rule_id, candidate_index, p
         if resolved_file then candidate.file = resolved_file end
         if patch.weight ~= nil then candidate.weight = patch.weight end
         if patch.volume ~= nil then candidate.volume = patch.volume end
+        if patch.min_volume_percent ~= nil then candidate.minVolumePercent = patch.min_volume_percent end
         if patch.speed ~= nil then candidate.speed = patch.speed end
         if patch.max_duration_ms ~= nil then candidate.maxDurationMs = patch.max_duration_ms end
         if patch.action_key ~= nil then
@@ -869,6 +874,7 @@ function Manager.get_candidate_playback_spec(manager, group_id, rule_id, candida
                 stable_key = "test-candidate",
                 file = candidate.file,
                 volume = candidate.volume,
+                min_volume_percent = candidate.min_volume_percent,
                 speed = candidate.speed,
                 max_duration_ms = candidate.max_duration_ms
             }

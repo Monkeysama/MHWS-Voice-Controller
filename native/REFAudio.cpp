@@ -567,7 +567,7 @@ void run_audio_worker() {
     }
     std::map<std::string, MailboxClient> mailboxes;
     const std::string backend_marker =
-        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1\tspatial_batch=1\tclient_mailboxes=1\tclient_protocol=1\tmax_clients=16\tspatial_downmix=1\tboot_id=" + boot;
+        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1\tspatial_batch=1\tclient_mailboxes=1\tclient_protocol=1\tmax_clients=16\tspatial_downmix=1\tclient_spatial3d=1\tclient_spatial_gain=1\tboot_id=" + boot;
     DeleteFileW(backend_path.c_str());
     BassApi bass;
     if (!bass.load(base_dir / L"REFAudio_BASS.dll")) {
