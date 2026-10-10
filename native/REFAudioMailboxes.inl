@@ -9,7 +9,9 @@ struct PcmStream {
     std::string last_command_text, last_response;
     std::string state = "starting", error;
     bool started{}, finished{}, stopped{};
+    double last_seconds{};
     std::size_t received_chunks{}, consumed_chunks{};
+    std::vector<std::size_t> chunk_ends;
 };
 
 // 多客户端邮箱仅由音频工作线程轮询；客户端通道与旧入口完全隔离。
@@ -24,6 +26,7 @@ struct MailboxClient {
     std::vector<std::string> retired_sessions;
     unsigned long long highest{};
     std::unique_ptr<PcmStream> stream;
+    std::string last_stream_start;
 };
 
 // 严格 ASCII 标识避免路径转义。
@@ -63,13 +66,18 @@ static std::string stream_response(const std::string& boot, const std::string& s
 static void write_pcm_state(BassApi& bass, PcmStream& stream, const std::filesystem::path& dir,
     const std::string& boot) {
     double seconds = stream.channel.stream ? bass.bytes_to_seconds(stream.channel.stream,
-        bass.position(stream.channel.stream, BASS_POS_BYTE)) : 0.0;
+        bass.position(stream.channel.stream, BASS_POS_BYTE)) : stream.last_seconds;
+    stream.last_seconds = seconds;
+    stream.consumed_bytes = std::min(stream.received_bytes, static_cast<std::size_t>(std::max(0.0, seconds) * stream.sample_rate * stream.channels * 2));
+    if(stream.state=="ended")stream.consumed_bytes=stream.received_bytes;
+    stream.buffered_bytes = (stream.state=="stopped"||stream.state=="error")?0:stream.received_bytes - stream.consumed_bytes;
+    stream.consumed_chunks = static_cast<std::size_t>(std::upper_bound(stream.chunk_ends.begin(),stream.chunk_ends.end(),stream.consumed_bytes)-stream.chunk_ends.begin());
     std::ostringstream out; out << "{\"boot_id\":\"" << boot << "\",\"session_id\":\"" << stream.session_id
         << "\",\"request_id\":\"" << stream.request_id << "\",\"state\":\"" << stream.state
         << "\",\"received_chunks\":" << stream.received_chunks << ",\"consumed_chunks\":" << stream.consumed_chunks
         << ",\"received_bytes\":" << stream.received_bytes << ",\"consumed_bytes\":" << stream.consumed_bytes
         << ",\"buffered_bytes\":" << stream.buffered_bytes << ",\"duration_seconds\":" << seconds
-        << ",\"last_chunk_index\":" << (stream.next_chunk ? stream.next_chunk - 1 : 0)
+        << ",\"last_chunk_index\":" << stream.next_chunk
         << ",\"error_code\":" << (stream.error.empty() ? "null" : ("\"" + stream.error + "\"")) << "}\n";
     write_text_atomic(dir / L"stream_state.json", out.str());
 }
@@ -82,7 +90,8 @@ static void poll_pcm_stream(BassApi& bass, const std::filesystem::path& client_d
     std::string start_text, command_text;
     { std::ifstream f(start_path, std::ios::binary); if (f) start_text.assign(std::istreambuf_iterator<char>(f), {}); }
     { std::ifstream f(command_path, std::ios::binary); if (f) command_text.assign(std::istreambuf_iterator<char>(f), {}); }
-    if (!start_text.empty() && !client.stream) {
+    if (!start_text.empty() && !client.stream && start_text != client.last_stream_start) {
+        client.last_stream_start = start_text;
         std::string request, session, format, directory; double channel{}, rate{}, chans{}, bits{}, volume{}, speed{}, duration{}, prebuffer{};
         bool valid = json_string(start_text, "boot_id", format) && format == boot && json_string(start_text, "session_id", session)
             && json_string(start_text, "request_id", request) && json_string(start_text, "format", format) && format == "pcm_s16le"
@@ -100,14 +109,16 @@ static void poll_pcm_stream(BassApi& bass, const std::filesystem::path& client_d
             stream->prebuffer_bytes = static_cast<std::size_t>(rate * chans * 2 * prebuffer / 1000.0);
             stream->state = "buffering";
             stream->channel.volume = static_cast<float>(volume); stream->channel.speed = static_cast<float>(speed); stream->channel.max_duration = duration;
-            stream->channel.stream = bass.create_push_stream(stream->sample_rate, stream->channels, BASS_SAMPLE_OVER_VOL, nullptr, nullptr);
+            stream->channel.stream = bass.create_push_stream(stream->sample_rate, stream->channels, BASS_SAMPLE_OVER_VOL,
+                reinterpret_cast<void*>(static_cast<intptr_t>(-1)), nullptr);
             if (!stream->channel.stream) { stream->state = "error"; stream->error = "bass_create_failed"; }
-            else client.stream = std::move(stream);
+            else if (!bass.set_attribute(stream->channel.stream,BASS_ATTRIB_FREQ,static_cast<float>(rate*speed))) {free_channel(bass,stream->channel);stream->state="error";stream->error="bass_create_failed";}
+            client.stream = std::move(stream);
         }
     }
     if (client.stream) {
         auto& stream = *client.stream;
-        if (!command_text.empty()) {
+        if (!command_text.empty() && command_text != stream.last_command_text) {
             std::string command_boot, command_session, request, action, file; double command_id_num{}, chunk_num{}, bytes_num{};
             bool valid = json_string(command_text, "boot_id", command_boot) && command_boot == boot
                 && json_string(command_text, "session_id", command_session) && command_session == stream.session_id
@@ -122,6 +133,8 @@ static void poll_pcm_stream(BassApi& bass, const std::filesystem::path& client_d
             std::string error;
             if (command_text.empty()) error.clear();
             else if (!valid) error = "request_conflict";
+            else if (action == "chunk" && stream.finished) error = "stream_already_finished";
+            else if (action == "chunk" && stream.received_chunks >= 8192) error = "chunk_limit";
             else if (action == "chunk") {
                 valid = json_number(command_text, "chunk_index", chunk_num) && chunk_num >= 1
                     && chunk_num == std::floor(chunk_num) && json_string(command_text, "file", file)
@@ -142,16 +155,17 @@ static void poll_pcm_stream(BassApi& bass, const std::filesystem::path& client_d
                     if (error.empty()) {
                         auto accepted = bass.put_data(stream.channel.stream, data.data(), static_cast<DWORD>(data.size()));
                         if (accepted == DWORD(-1)) error = "bass_create_failed";
-                        else { stream.next_chunk = static_cast<unsigned long long>(chunk_num); stream.received_chunks++; stream.received_bytes += data.size(); stream.buffered_bytes += data.size(); }
+                        else { stream.next_chunk = static_cast<unsigned long long>(chunk_num); stream.received_chunks++; stream.received_bytes += data.size(); stream.buffered_bytes += data.size();stream.chunk_ends.push_back(stream.received_bytes); }
                     }
                 }
             } else if (action == "finish") {
                 stream.finished = true;
                 if (!stream.started && stream.buffered_bytes > 0) {
-                    if (!bass.play(stream.channel.stream, TRUE)) error = "bass_play_failed";
+                    if (!bass.set_attribute(stream.channel.stream, BASS_ATTRIB_VOL, stream.channel.volume) || !bass.play(stream.channel.stream, FALSE)) error = "bass_play_failed";
                     else { stream.started = true; stream.state = "draining"; }
                 } else stream.state = stream.started ? "draining" : "ended";
-                bass.put_data(stream.channel.stream, nullptr, 0);
+                // BASS_STREAMPROC_END 封口 push stream；0 只是查询缓冲，不能表示 EOF。
+                if (bass.put_data(stream.channel.stream, nullptr, 0x80000000u) == DWORD(-1)) error = "bass_finish_failed";
             } else if (action == "stop") {
                 stream.stopped = true; stream.state = "stopped"; free_channel(bass, stream.channel); stream.buffered_bytes = 0;
             } else if (action == "start") {
@@ -161,7 +175,7 @@ static void poll_pcm_stream(BassApi& bass, const std::filesystem::path& client_d
             stream.command_id = command_id;
             if (error.empty() && action == "chunk" && !stream.started && stream.buffered_bytes >= stream.prebuffer_bytes) {
                 if (!bass.set_attribute(stream.channel.stream, BASS_ATTRIB_VOL, stream.channel.volume)
-                    || !bass.play(stream.channel.stream, TRUE)) error = "bass_play_failed";
+                    || !bass.play(stream.channel.stream, FALSE)) error = "bass_play_failed";
                 else { stream.started = true; stream.state = "playing"; }
             }
             if (!error.empty()) { stream.error = error; stream.state = "error"; }
@@ -172,12 +186,18 @@ static void poll_pcm_stream(BassApi& bass, const std::filesystem::path& client_d
         }
         if (stream.channel.stream && stream.started) {
             auto active = bass.active(stream.channel.stream);
-            if (stream.finished && !active) { stream.state = "ended"; free_channel(bass, stream.channel); }
+            stream.last_seconds = bass.bytes_to_seconds(stream.channel.stream, bass.position(stream.channel.stream, BASS_POS_BYTE));
+            if (stream.channel.max_duration > 0 && stream.last_seconds >= stream.channel.max_duration) {
+                stream.state = "ended"; free_channel(bass, stream.channel);
+            }
+            else if (stream.finished && !active) { stream.state = "ended"; free_channel(bass, stream.channel); }
             else if (stream.finished) stream.state = "draining";
             else if (active == BASS_ACTIVE_PLAYING) stream.state = "playing";
         }
         write_pcm_state(bass, stream, client_dir, boot);
-        if (stream.state == "ended" || stream.state == "stopped" || stream.state == "error") client.stream.reset();
+        if (stream.state == "ended" || stream.state == "stopped" || stream.state == "error") {
+            free_channel(bass, stream.channel); client.stream.reset();
+        }
     }
 }
 
