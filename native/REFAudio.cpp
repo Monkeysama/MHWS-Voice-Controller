@@ -25,6 +25,7 @@ constexpr DWORD BASS_SAMPLE_MONO = 2;
 constexpr DWORD BASS_SAMPLE_3D = 8;
 constexpr DWORD BASS_SAMPLE_OVER_VOL = 0x10000;
 constexpr DWORD BASS_STREAM_DECODE = 0x200000;
+constexpr DWORD BASS_STREAM_BLOCK = 0x100000;
 constexpr DWORD BASS_POS_BYTE = 0;
 constexpr DWORD BASS_ATTRIB_FREQ = 1;
 constexpr DWORD BASS_ATTRIB_VOL = 2;
@@ -48,6 +49,8 @@ using BASS_Free_t = BOOL(WINAPI*)();
 using BASS_ErrorGetCode_t = int(WINAPI*)();
 using BASS_StreamCreateFile_t = DWORD(WINAPI*)(BOOL, const void*,
     unsigned long long, unsigned long long, DWORD);
+using BASS_StreamCreate_t = DWORD(WINAPI*)(DWORD, DWORD, DWORD, void*, void*);
+using BASS_StreamPutData_t = DWORD(WINAPI*)(DWORD, const void*, DWORD);
 using BASS_StreamFree_t = BOOL(WINAPI*)(DWORD);
 using BASS_ChannelPlay_t = BOOL(WINAPI*)(DWORD, BOOL);
 using BASS_ChannelPause_t = BOOL(WINAPI*)(DWORD);
@@ -76,6 +79,8 @@ struct BassApi {
     BASS_Free_t free{};
     BASS_ErrorGetCode_t error{};
     BASS_StreamCreateFile_t create_stream{};
+    BASS_StreamCreate_t create_push_stream{};
+    BASS_StreamPutData_t put_data{};
     BASS_StreamFree_t free_stream{};
     BOOL (WINAPI* info)(DWORD, BassChannelInfo*){};
     DWORD (WINAPI* data)(DWORD, void*, DWORD){};
@@ -105,6 +110,8 @@ struct BassApi {
         BASS_LOAD(free, "BASS_Free");
         BASS_LOAD(error, "BASS_ErrorGetCode");
         BASS_LOAD(create_stream, "BASS_StreamCreateFile");
+        BASS_LOAD(create_push_stream, "BASS_StreamCreate");
+        BASS_LOAD(put_data, "BASS_StreamPutData");
         BASS_LOAD(free_stream, "BASS_StreamFree");
         BASS_LOAD(info, "BASS_ChannelGetInfo");
         BASS_LOAD(data, "BASS_ChannelGetData");
@@ -567,7 +574,7 @@ void run_audio_worker() {
     }
     std::map<std::string, MailboxClient> mailboxes;
     const std::string backend_marker =
-        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1\tspatial_batch=1\tclient_mailboxes=1\tclient_protocol=1\tmax_clients=16\tspatial_downmix=1\tclient_spatial3d=1\tclient_spatial_gain=1\tboot_id=" + boot;
+        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1\tspatial_batch=1\tclient_mailboxes=1\tclient_protocol=1\tmax_clients=16\tspatial_downmix=1\tclient_spatial3d=1\tclient_spatial_gain=1\tstreaming_pcm=1\tstreaming_3d=0\tstream_protocol=1\tboot_id=" + boot;
     DeleteFileW(backend_path.c_str());
     BassApi bass;
     if (!bass.load(base_dir / L"REFAudio_BASS.dll")) {

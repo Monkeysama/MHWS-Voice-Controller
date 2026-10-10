@@ -6,7 +6,7 @@ local ActionContext = require("VoiceController/VoiceControllerActionContext")
 
 local MAX_CONCURRENT = 32
 local DEFAULT_VOLUME = 1.5
-local DEFAULT_MIN_VOLUME_PERCENT = 65
+local DEFAULT_MIN_VOLUME_PERCENT = 50
 local MAX_VOLUME = 5.0
 -- REFAudio 外部通道目前没有把自然结束回调传回 Lua；未指定最大时长时用短租约释放并发令牌，避免一次播放永久锁死规则。
 local DEFAULT_TOKEN_LEASE_MS = 2000

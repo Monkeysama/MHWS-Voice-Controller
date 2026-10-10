@@ -4,7 +4,7 @@
 local RuleEngine = {}
 
 local DEFAULT_VOLUME = 1.5
-local DEFAULT_MIN_VOLUME_PERCENT = 65
+local DEFAULT_MIN_VOLUME_PERCENT = 50
 local MAX_VOLUME = 5.0
 
 local function add_error(errors, code)

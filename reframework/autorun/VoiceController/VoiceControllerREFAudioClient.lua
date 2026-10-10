@@ -12,7 +12,7 @@ local MAX_SPATIAL_UPDATES_PER_TICK = 4
 local DISTANCE_REFERENCE = 1.5
 local DISTANCE_MAX = 40.0
 local DISTANCE_ROLLOFF = 1.0
-local DEFAULT_MIN_VOLUME_PERCENT = 65
+local DEFAULT_MIN_VOLUME_PERCENT = 50
 local check_backend
 
 local function read_all(path)
@@ -100,7 +100,7 @@ local function read_spatial_state(spec)
     }
 end
 
--- 帧线程读取候选音量下限；比例相对于设定音量，缺省或非法值回退 65%。
+-- 帧线程读取候选音量下限；比例相对于设定音量，缺省或非法值回退 50%。
 local function minimum_gain(spec)
     local percent = tonumber(spec.min_volume_percent)
     if not percent or percent ~= percent or percent < 0 or percent > 100 then

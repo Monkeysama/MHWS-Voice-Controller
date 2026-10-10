@@ -89,7 +89,7 @@ function formatDuration(durationMs?: number) {
       </label>
       <label>
         <span :title="t('candidate.minVolumeHint')">{{ t('candidate.minVolumePercent') }}</span>
-        <el-input-number :model-value="candidate.minVolumePercent ?? 65" :min="0" :max="100" :step="1" :precision="0" controls-position="right" @change="updateMinVolume" />
+        <el-input-number :model-value="candidate.minVolumePercent ?? 50" :min="0" :max="100" :step="1" :precision="0" controls-position="right" @change="updateMinVolume" />
       </label>
       <label>
         <span>{{ t('candidate.speed') }}</span>

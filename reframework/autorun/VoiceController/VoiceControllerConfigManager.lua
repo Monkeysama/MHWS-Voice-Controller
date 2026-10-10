@@ -10,7 +10,7 @@ local Manager = {}
 local DEFAULT_GROUP_ID = "captured_audio"
 local DEFAULT_BLOCKED_SOURCE_PREFIXES = {"SoundLayerdRandomGenerator", "EnvPos"}
 local DEFAULT_VOLUME = 1.5
-local DEFAULT_MIN_VOLUME_PERCENT = 65
+local DEFAULT_MIN_VOLUME_PERCENT = 50
 
 -- 返回全新默认配置；用于正式包首次启动，调用方可安全修改而不会共享表引用。
 function Manager.default_config()
