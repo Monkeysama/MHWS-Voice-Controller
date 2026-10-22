@@ -30,6 +30,7 @@ constexpr DWORD BASS_POS_BYTE = 0;
 constexpr DWORD BASS_ATTRIB_FREQ = 1;
 constexpr DWORD BASS_ATTRIB_VOL = 2;
 constexpr DWORD BASS_ACTIVE_PLAYING = 1;
+constexpr DWORD BASS_ACTIVE_STALLED = 2;
 constexpr DWORD BASS_ACTIVE_PAUSED = 3;
 constexpr DWORD BASS_3DMODE_NORMAL = 0;
 constexpr std::size_t MAX_CHANNELS = 32;
@@ -574,7 +575,7 @@ void run_audio_worker() {
     }
     std::map<std::string, MailboxClient> mailboxes;
     const std::string backend_marker =
-        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1\tspatial_batch=1\tclient_mailboxes=1\tclient_protocol=1\tmax_clients=16\tspatial_downmix=1\tclient_spatial3d=1\tclient_spatial_gain=1\tstreaming_pcm=1\tstreaming_3d=0\tstream_protocol=1\tstream_push_eof=1\tboot_id=" + boot;
+        "REFAudio\t1\tmultichannel=1\tmax_channels=32\tgroup_dirs=1\tcatalog_utf8=1\tspatial3d=1\tspatial_batch=1\tclient_mailboxes=1\tclient_protocol=1\tmax_clients=16\tspatial_downmix=1\tclient_spatial3d=1\tclient_spatial_gain=1\tstreaming_pcm=1\tstreaming_3d=1\tstream_protocol=1\tstream_spatial_protocol=1\tstream_spatial_gain=1\tstream_push_eof=1\tstream_rebuffer=1\tboot_id=" + boot;
     DeleteFileW(backend_path.c_str());
     BassApi bass;
     if (!bass.load(base_dir / L"REFAudio_BASS.dll")) {
@@ -647,6 +648,11 @@ void run_audio_worker() {
                     for (auto& [_, client] : mailboxes) {
                         for (auto& [id, channel] : client.channels) { free_channel(bass, channel); client.states[id] = "stopped"; }
                         client.channels.clear();
+                        if (client.stream) {
+                            client.stream->state = "stopped"; client.stream->stopped = true;
+                            // 下一轮邮箱输出终态；先释放句柄，旧空间快照不能恢复播放。
+                            free_channel(bass, client.stream->channel);
+                        }
                     }
                 } else if (action == "ensure_dir") {
                     if (parts.size() >= 5) {
@@ -659,7 +665,7 @@ void run_audio_worker() {
                     if ((!channelized && parts.size() >= 6) || channelized_load) {
                         const bool new_channel = channels.find(channel_id) == channels.end();
                         std::size_t occupied = channels.size();
-                        for (const auto& [_, client] : mailboxes) occupied += client.channels.size();
+                        for (const auto& [_, client] : mailboxes) occupied += client.channels.size() + (client.stream ? 1 : 0);
                         if (new_channel && occupied >= MAX_CHANNELS) {
                             write_status(status_path, "error", "channel_limit");
                         } else {
@@ -801,7 +807,10 @@ void run_audio_worker() {
 
     for (auto& [_, channel] : channels) free_channel(bass, channel);
     channels.clear();
-    for (auto& [_, client] : mailboxes) for (auto& [id, channel] : client.channels) free_channel(bass, channel);
+    for (auto& [_, client] : mailboxes) {
+        for (auto& [id, channel] : client.channels) free_channel(bass, channel);
+        if (client.stream) free_channel(bass, client.stream->channel);
+    }
     bass.free();
     write_status(status_path, "stopped", "0");
     CloseHandle(mutex);

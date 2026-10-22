@@ -3,6 +3,7 @@ docs/*
 !docs/REFAUDIO_CLIENT_PROTOCOL.md
 tool/test-*
 !tool/test-refaudio-native.cpp
+!tool/test-refaudio-native.ps1
 AGENTS.md
 web/voice-controller/node_modules/
 reframework/reff/plugins/voice-controller/.reff-dev-version

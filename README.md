@@ -51,7 +51,7 @@ flowchart TD
 
 替换素材支持多声道输入：3D 播放时自动混合为单声道，保留游戏声源的方向和距离效果，素材原有左右/环绕布局会合并。单声道素材沿用直接加载；二维播放保持原声道。多声道转换后的 PCM 每份限制 32 MiB，建议使用短语音素材。
 
-其他项目可以通过独立客户端邮箱使用 REFAudio，避免与 VoiceController 覆盖命令或通道。接口格式、确认、错误码及兼容边界见 [REFAudio 客户端协议](docs/REFAUDIO_CLIENT_PROTOCOL.md)，调用示例见 [C# 示例](tool/REFAudioMailboxExample.cs)。旧入口继续兼容；旧 stop_all 仍会停止所有客户端。
+其他项目可以通过独立客户端邮箱使用 REFAudio，避免与 VoiceController 覆盖命令或通道。完整 MP3 使用 mailbox 的 `load`；低延迟 TTS 使用 `stream_start.json` 和 PCM `stream_command.json`，支持普通 2D 及单声道 BASS 3D push 流，达到预缓冲后才报告 `playing`。3D 的位置和实际增益通过独立 `stream_spatial.json` 更新，不阻塞音频命令或重新起播；监听者是设备级共享的游戏相机。接口格式、能力声明、确认、错误码及兼容边界见 [REFAudio 客户端协议](docs/REFAUDIO_CLIENT_PROTOCOL.md)，调用示例见 [C# 示例](tool/REFAudioMailboxExample.cs)。旧入口继续兼容；旧 stop_all 仍会停止所有客户端。
 
 ## 依赖关系
 
