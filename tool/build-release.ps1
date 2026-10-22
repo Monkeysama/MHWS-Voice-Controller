@@ -71,7 +71,9 @@ try {
         "audio_probe.log",
         "diagnostics.json",
         "recent.json",
-        "audio_catalog.json"
+        "audio_catalog.json",
+        "development.json",
+        ".reff-dev-version"
     )
     $forbiddenFiles = @(Get-ChildItem -LiteralPath $stagingRoot -Recurse -File | Where-Object {
         $_.Name -in $forbiddenNames -or $_.Extension -in @(".tmp", ".bak")

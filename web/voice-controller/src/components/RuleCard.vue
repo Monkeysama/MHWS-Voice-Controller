@@ -166,25 +166,25 @@ const setConcurrent = (value: number | undefined) => setInteger('maxConcurrent',
 </template>
 
 <style scoped>
-.rule-card { overflow: hidden; border: 1px solid var(--vc-border); border-radius: 6px; background: var(--vc-surface); transition: border-color 120ms ease, background-color 120ms ease; }
+.rule-card { overflow: hidden; border: 1px solid var(--vc-border); border-radius: var(--reff-corner-radius, 6px); background: var(--vc-surface); transition: border-color 120ms ease, background-color 120ms ease; }
 .rule-card + .rule-card { margin-top: 9px; }
-.rule-card summary { display: grid; min-height: 56px; grid-template-columns: 40px auto minmax(140px, 1fr) minmax(150px, auto) auto; align-items: center; gap: 10px; padding: 7px 10px; cursor: pointer; list-style: none; }
+.rule-card summary { display: grid; min-height: 56px; grid-template-columns: var(--reff-control-height-lg, 40px) auto minmax(140px, 1fr) minmax(150px, auto) auto; align-items: center; gap: 10px; padding: 7px 10px; cursor: pointer; list-style: none; }
 .rule-card summary::-webkit-details-marker { display: none; }
 .rule-card summary:hover, .rule-card summary:focus-visible { background: var(--vc-accent-soft); outline: none; }
 .rule-card:has(> summary:hover), .rule-card:has(> summary:focus-visible) { border-color: var(--vc-accent); }
-.rule-toggle { display: grid; width: 40px; height: 40px; place-items: center; color: var(--vc-muted); font-size: 14px; transition: color 120ms ease, transform 120ms ease; }
+.rule-toggle { display: grid; width: var(--reff-control-height-lg, 40px); height: var(--reff-control-height-lg, 40px); place-items: center; color: var(--vc-muted); font-size: var(--reff-font-size-md, 14px); transition: color 120ms ease, transform 120ms ease; }
 .rule-toggle > svg { width: 14px; height: 14px; }
 .rule-card[open] > summary .rule-toggle { transform: rotate(90deg); }
 .rule-card summary:hover .rule-toggle, .rule-card summary:focus-visible .rule-toggle { color: var(--vc-accent-strong); }
 .rule-enabled { cursor: default; }
 .rule-name { overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.rule-card code { color: var(--vc-muted); font-size: 12px; }
+.rule-card code { color: var(--vc-muted); font-size: var(--reff-font-size-xs, 12px); }
 .rule-body { padding: 12px; border-top: 1px solid var(--vc-border); }
 .rule-controls { display: grid; grid-template-columns: repeat(4, minmax(125px, 1fr)); gap: 9px; }
-.rule-controls label > span { display: block; margin-bottom: 5px; color: var(--vc-muted); font-size: 11px; }
+.rule-controls label > span { display: block; margin-bottom: 5px; color: var(--vc-muted); font-size: var(--reff-font-size-xs, 11px); }
 .rule-controls :deep(.el-select), .rule-controls :deep(.el-input-number) { width: 100%; }
 .candidate-list { display: grid; gap: 8px; margin-top: 12px; }
 .rule-actions { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto; gap: 8px; margin-top: 11px; }
 @media (max-width: 900px) { .rule-controls { grid-template-columns: repeat(2, minmax(125px, 1fr)); } }
-@media (max-width: 760px) { .rule-card summary { grid-template-columns: 40px auto 1fr auto; } .rule-card summary code { grid-column: 3 / -1; } .rule-controls, .rule-actions { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .rule-card summary { grid-template-columns: var(--reff-control-height-lg, 40px) auto 1fr auto; } .rule-card summary code { grid-column: 3 / -1; } .rule-controls, .rule-actions { grid-template-columns: 1fr; } }
 </style>

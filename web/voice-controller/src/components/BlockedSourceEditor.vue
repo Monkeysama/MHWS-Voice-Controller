@@ -21,8 +21,8 @@ function remove(item: string) { emit('update', {prefixes: props.prefixes.filter(
 <style scoped>
 .blocked-editor { padding: 18px 20px; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.section-heading h2 { margin: 3px 0 0; font-size: 17px; }
-.eyebrow, .description, .empty-state { color: var(--vc-muted); font-size: 12px; }
+.section-heading h2 { margin: 3px 0 0; font-size: var(--reff-font-size-xl, 17px); }
+.eyebrow, .description, .empty-state { color: var(--vc-muted); font-size: var(--reff-font-size-xs, 12px); }
 .description { margin: 0 0 14px; }
 .blocked-add, .blocked-row { display: flex; align-items: center; gap: 8px; }
 .blocked-add { max-width: 620px; margin-bottom: 8px; }

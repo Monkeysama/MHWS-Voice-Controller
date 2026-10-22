@@ -27,8 +27,8 @@ const {t} = useI18n();
 <style scoped>
 .save-bar { position: sticky; bottom: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 20px; border-top: 1px solid var(--vc-border); background: color-mix(in srgb, var(--vc-bg) 92%, transparent); backdrop-filter: blur(12px); }
 .save-state, .actions { display: flex; align-items: center; gap: 9px; }
-.save-state { color: var(--vc-muted); font-size: 13px; }
-.save-state i { width: 8px; height: 8px; border-radius: 50%; background: #5eac87; }
-.save-state i.dirty { background: #e2a93b; }
+.save-state { color: var(--vc-muted); font-size: var(--reff-font-size-sm, 13px); }
+.save-state i { width: 8px; height: 8px; border-radius: 50%; background: var(--vc-accent); }
+.save-state i.dirty { background: var(--vc-warning); }
 .save-button.is-disabled { color: var(--vc-muted); border-color: var(--vc-border); background: var(--vc-bg-soft); opacity: .62; }
 </style>

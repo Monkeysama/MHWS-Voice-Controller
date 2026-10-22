@@ -20,14 +20,15 @@ const tooltip = computed(() => props.status === 'failed' && props.error
 <style scoped>
 .playback-status {
   display: inline-grid;
-  width: 78px;
-  height: 24px;
+  min-width: calc(78px * var(--reff-text-scale, 1));
+  padding: 0 6px;
+  height: var(--reff-control-height-sm, 24px);
   place-items: center;
   border: 1px solid var(--vc-border);
-  border-radius: 4px;
+  border-radius: var(--reff-corner-radius, 6px);
   color: var(--vc-muted);
   background: var(--vc-bg-soft);
-  font-size: 11px;
+  font-size: var(--reff-font-size-xs, 11px);
   white-space: nowrap;
 }
 .is-trying { color: var(--vc-text); border-color: color-mix(in srgb, var(--vc-muted) 55%, var(--vc-border)); }

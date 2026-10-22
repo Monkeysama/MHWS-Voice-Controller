@@ -44,6 +44,9 @@ jobs:
         shell: pwsh
         run: |
           pnpm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm run build
 
       - name: Build release archive

@@ -1,7 +1,7 @@
 import { ReffError, ReffClient, ReffSubscription, ReffTransport, InputFocusReporter, DevReloadController } from './types';
 export * from './types';
 
-// 生产环境使用 CEF cefQuery；每个请求只等待一次结果，关闭或重置后不自动重放写请求。
+// 通过宿主绑定的文档通道通信；每个请求只等待一次结果，关闭或重置后不自动重放写请求。
 export function createReffClient(transport: ReffTransport): ReffClient {
   let closed = false;
   const subscriptions = new Set<string>();
@@ -37,7 +37,7 @@ export function createReffClient(transport: ReffTransport): ReffClient {
       const subscriptionId = `${eventName}:${randomId}`;
       await call('ui.subscribe', { eventName, subscriptionId });
       subscriptions.add(subscriptionId);
-      // 事件由 Shell 的受控分发器转交；插件不会直接监听 CEF/IPC 通道。
+      // 事件由原生宿主按文档身份分发；插件不会直接访问 IPC 通道。
       const handler = (event: Event) => listener((event as CustomEvent<T>).detail);
       window.addEventListener(`reff:${subscriptionId}`, handler);
       listeners.set(subscriptionId, handler);
@@ -51,6 +51,8 @@ export function createReffClient(transport: ReffTransport): ReffClient {
 
 /** 开发期轮询版本标记，构建成功后仅刷新当前插件页面。 */
 export function installDevReload(client: ReffClient, intervalMs = 700): DevReloadController {
+  // WebView2 隔离页由 Shell 统一监视，避免两端同时重载造成文档失效与重复订阅。
+  if (window.parent !== window && hasWebView2Transport()) return () => {};
   let stopped = false;
   let lastVersion = '';
   let timer: number | undefined;
@@ -67,27 +69,33 @@ export function installDevReload(client: ReffClient, intervalMs = 700): DevReloa
   return () => { stopped = true; if (timer !== undefined) window.clearTimeout(timer); };
 }
 
-// 创建 CEF 页面默认传输；不存在 cefQuery 时由调用者注入 mock transport。
-export function createCefTransport(): ReffTransport {
-  return { call(method, params = {}) { return new Promise((resolve, reject) => {
-    const query = (window as Window & { cefQuery?: Function }).cefQuery;
-    if (!query) { reject(new ReffError('HOST_DISCONNECTED', 'CEF 桥接不可用')); return; }
-    query({ request: JSON.stringify({ method, params }), onSuccess: (raw: string) => { try { resolve(JSON.parse(raw)); } catch { reject(new ReffError('INVALID_MESSAGE', '响应不是 JSON')); } }, onFailure: (code: number, reason: string) => reject(new ReffError(String(code), reason)) });
-  }); } };
+// WebView2 由原生 DocumentCreated 注入；此能力只说明当前后端，权限仍由实际 frame/文档绑定校验。
+export function hasWebView2Transport(): boolean {
+  return typeof (window as Window & { reffNativeCall?: unknown }).reffNativeCall === 'function';
 }
 
-// 隔离页面传输：只通过父级 REFF Shell 转发请求，不直接暴露 CEF 查询接口。
+// 每个文档通过宿主注入的原生通道通信；权限由真实 frame、会话和文档代次校验。
+export function createHostTransport(): ReffTransport {
+  return { async call(method, params = {}) {
+    const nativeCall = (window as Window & { reffNativeCall?: (method: string, params: Record<string, unknown>) => Promise<unknown> }).reffNativeCall;
+    if (!nativeCall) throw new ReffError('HOST_DISCONNECTED', 'WebView2 桥接不可用');
+    try { return await nativeCall(method, params); }
+    catch (error) {
+      const value = error as { code?: string; message?: string };
+      throw new ReffError(value?.code || 'TRANSPORT_ERROR', value?.message || 'WebView2 桥接不可用');
+    }
+  } };
+}
+
+// 隔离页业务直达原生 frame；只有输入法坐标由 Shell 换算到顶层视口。
 export function createEmbeddedTransport(): ReffTransport {
+  const native = createHostTransport();
   let sequence = 0;
   let closed = false;
   const pending = new Map<string, { resolve: (value: unknown) => void; reject: (reason: unknown) => void }>();
   const listener = (event: MessageEvent) => {
     if (closed) return;
     if (event.source !== window.parent) return;
-    if (event.data?.type === 'reff:event' && typeof event.data.subscriptionId === 'string') {
-      window.dispatchEvent(new CustomEvent(`reff:${event.data.subscriptionId}`, { detail: event.data.payload }));
-      return;
-    }
     if (event.data?.type !== 'reff:response') return;
     const item = pending.get(event.data.id); if (!item) return; pending.delete(event.data.id);
     event.data.ok ? item.resolve(event.data.result) : item.reject(new ReffError(event.data.code || 'TRANSPORT_ERROR', event.data.message || '隔离页面请求失败'));
@@ -95,6 +103,11 @@ export function createEmbeddedTransport(): ReffTransport {
   window.addEventListener('message', listener);
   return {
     call(method, params = {}) {
+      // iframe 的业务调用直接绑定原生文档；只有焦点坐标需要由 Shell 换算到顶层视口。
+      if (method !== 'ui.input.focus') {
+        if (closed) return Promise.reject(new ReffError('HOST_DISCONNECTED', '隔离页面已销毁'));
+        return native.call(method, params);
+      }
       return new Promise((resolve, reject) => {
         if (closed) { reject(new ReffError('HOST_DISCONNECTED', '隔离页面已销毁')); return; }
         const id = `embedded:${++sequence}`;
@@ -127,6 +140,18 @@ export function installInputFocusReporter(client: ReffClient): InputFocusReporte
   const report = (element: HTMLInputElement | HTMLTextAreaElement, active: boolean) => {
     if (disposed) return;
     const rect = element.getBoundingClientRect();
+    // 标准 EDIT 的插入点以文字区域为原点；扣除 CSS 边框/内边距，并匹配单行文本的垂直居中。
+    const style = getComputedStyle(element);
+    const px = (value: string) => Number.parseFloat(value) || 0;
+    const scaleX = rect.width / Math.max(1, element.offsetWidth);
+    const scaleY = rect.height / Math.max(1, element.offsetHeight);
+    const fontSize = Math.max(1, px(style.fontSize) * scaleY);
+    const leftInset = (px(style.borderLeftWidth) + px(style.paddingLeft)) * scaleX;
+    const rightInset = (px(style.borderRightWidth) + px(style.paddingRight)) * scaleX;
+    const topInset = (px(style.borderTopWidth) + px(style.paddingTop)) * scaleY;
+    const bottomInset = (px(style.borderBottomWidth) + px(style.paddingBottom)) * scaleY;
+    const contentHeight = Math.max(1, rect.height - topInset - bottomInset);
+    const lineHeight = Math.max(fontSize, px(style.lineHeight) * scaleY || fontSize * 1.2);
     const selectionStart = element.selectionStart ?? element.value.length;
     const selectionEnd = element.selectionEnd ?? selectionStart;
     void client.call('ui.input.focus', {
@@ -135,10 +160,11 @@ export function installInputFocusReporter(client: ReffClient): InputFocusReporte
       text: element.value,
       selectionStart,
       selectionEnd,
-      x: Math.round(rect.left),
-      y: Math.round(rect.top),
-      width: Math.max(1, Math.round(rect.width)),
-      height: Math.max(1, Math.round(rect.height)),
+      x: Math.round(rect.left + leftInset),
+      y: Math.round(rect.top + topInset + (element instanceof HTMLInputElement ? Math.max(0, (contentHeight - lineHeight) / 2) : 0)),
+      width: Math.max(1, Math.round(rect.width - leftInset - rightInset)),
+      height: Math.max(1, Math.round(element instanceof HTMLInputElement ? lineHeight : contentHeight)),
+      fontSize: Math.round(fontSize),
       viewportWidth: Math.max(1, Math.round(window.innerWidth)),
       viewportHeight: Math.max(1, Math.round(window.innerHeight)),
     }).catch(() => { /* 页面切换或宿主关闭时，焦点撤销无需向用户显示错误。 */ });
@@ -149,6 +175,8 @@ export function installInputFocusReporter(client: ReffClient): InputFocusReporte
     focused = null;
   };
   const activate = (element: HTMLInputElement | HTMLTextAreaElement) => {
+    // 一次点击会依次触发 pointerdown、捕获 focus 和冒泡 focusin；同一控件只建立一次会话，避免原生代理反复抢焦点。
+    if (focused === element) return;
     if (focused && focused !== element) report(focused, false);
     focused = element;
     report(element, true);
@@ -167,40 +195,32 @@ export function installInputFocusReporter(client: ReffClient): InputFocusReporte
   };
   const updateBounds = () => { if (focused) report(focused, true); };
   const onPointerDown = (event: PointerEvent) => {
-    // 部分 CEF 版本在 iframe 内不会把 focusin 冒泡到 window；从组合事件路径识别真实输入控件并立即激活。
+    // iframe 内的焦点事件可能未冒泡到 window；从组合事件路径识别真实输入控件并立即激活。
     const element = event.composedPath().find(isTextControl);
-    if (element && isTextControl(element)) activate(element);
+    if (element && isTextControl(element)) {
+      if (focused === element) window.setTimeout(() => { if (focused === element) report(element, true); }, 0);
+      else activate(element);
+    }
     else if (focused) deactivate();
   };
-  const onEmbeddedIme = (event: MessageEvent) => {
-    if (event.source !== window.parent || event.data?.type !== 'reff:ime' || !focused || event.data.action !== 'commit') return;
-    const text = typeof event.data.text === 'string' ? event.data.text : '';
-    const start = focused.selectionStart ?? focused.value.length;
-    const end = focused.selectionEnd ?? start;
-    const available = focused.maxLength >= 0 ? Math.max(0, focused.maxLength - (focused.value.length - (end - start))) : text.length;
-    focused.setRangeText(text.slice(0, available), start, end, 'end');
-    // Vue/React/原生页面都通过标准 input 事件观察提交结果；不模拟键盘事件，避免重复输入。
-    focused.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertCompositionText', data: text, isComposing: false }));
-    report(focused, true);
-  };
   window.addEventListener('focusin', onFocusIn);
+  window.addEventListener('reff:input-suspend', deactivate);
   window.addEventListener('focusout', onFocusOut);
   document.addEventListener('focus', onFocusIn, true);
   window.addEventListener('pointerdown', onPointerDown, true);
   window.addEventListener('resize', updateBounds);
   window.addEventListener('scroll', updateBounds, true);
-  window.addEventListener('message', onEmbeddedIme);
   // 不监听 window.blur：隔离 iframe 在原生 EDIT 代理接管焦点时也会收到 blur，不能据此关闭 IME。
   return () => {
     if (disposed) return;
     deactivate();
     disposed = true;
     window.removeEventListener('focusin', onFocusIn);
+    window.removeEventListener('reff:input-suspend', deactivate);
     window.removeEventListener('focusout', onFocusOut);
     document.removeEventListener('focus', onFocusIn, true);
     window.removeEventListener('pointerdown', onPointerDown, true);
     window.removeEventListener('resize', updateBounds);
     window.removeEventListener('scroll', updateBounds, true);
-    window.removeEventListener('message', onEmbeddedIme);
   };
 }

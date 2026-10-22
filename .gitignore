@@ -1,4 +1,5 @@
 .learnings/
+/dist/
 docs/*
 !docs/REFAUDIO_CLIENT_PROTOCOL.md
 tool/test-*

@@ -83,7 +83,7 @@ REFF 只是管理界面依赖，不参与音频 Hook、规则匹配或 BASS 播�
 
 1. Windows 版《怪物猎人：荒野》。
 2. 已正确安装并能运行 [REFramework](https://github.com/praydog/REFramework)。
-3. 需要制作或完整管理语音包时，再安装兼容版本的 [REFF](https://github.com/Monkeysama/REFF)。
+3. 需要制作或完整管理语音包时，安装 [REFF 1.x（最低 v1.0.0）](https://github.com/Monkeysama/REFF/releases/tag/v1.0.0) 及其要求的 WebView2 Evergreen Runtime；当前管理页面不兼容旧 CEF 版 REFF。
 
 ### 安装插件
 
@@ -281,6 +281,10 @@ reframework/data/VoiceController/
 - 出问题所在游戏场景
 
 ## 更新日志
+
+#### v1.1.3: REFF 1.0.0 兼容
+1. 更新隔离管理页面的 SDK 通信、输入焦点与页面销毁清理，适配 REFF WebView2 原生文档通道。
+2. 支持 REFF 共享外观、字号与语言偏好，并增加生命周期和服务回归测试。
 
 #### v1.1.2: 
 1. 支持多声道，多声道音频会转为单声道播出。

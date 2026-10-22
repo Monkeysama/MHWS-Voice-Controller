@@ -14,7 +14,7 @@ import type {ControllerState} from '@/types';
 const PLUGIN_ID = 'voice-controller';
 const CHANGE_EVENT = 'voice-controller.changed';
 
-// 管理 REFF 连接、轮询和写操作；页面状态以服务端快照为唯一事实来源。
+// 浏览器线程管理 REFF 连接、订阅和轮询；本页面拥有监听器和定时器，销毁后异步连接不得恢复它们。
 export function useVoiceController() {
   const {t} = useI18n();
   const client = createReffClient(createEmbeddedTransport());
@@ -28,6 +28,7 @@ export function useVoiceController() {
   let stopDevReload: (() => void) | undefined;
   let stopInputReporter: (() => void) | undefined;
   let requestInFlight = false;
+  let disposed = false;
 
   function formatError(reason: unknown) {
     if (!(reason instanceof ReffError)) return String(reason);
@@ -67,12 +68,15 @@ export function useVoiceController() {
   ));
 
   async function refresh(options: {silent?: boolean} = {}) {
-    if (requestInFlight || busy.value) return;
+    if (disposed || requestInFlight || busy.value) return;
     requestInFlight = true;
     try {
-      state.value = await client.call<ControllerState>('voice-controller.get-state');
+      const snapshot = await client.call<ControllerState>('voice-controller.get-state');
+      if (disposed) return;
+      state.value = snapshot;
       error.value = '';
     } catch (reason) {
+      if (disposed) return;
       error.value = formatError(reason);
       if (!options.silent) ElMessage.error(error.value);
     } finally {
@@ -82,12 +86,16 @@ export function useVoiceController() {
   }
 
   async function mutate(method: string, params: Record<string, unknown> = {}) {
+    if (disposed) return false;
     busy.value = true;
     try {
-      state.value = await client.call<ControllerState>(method, params);
+      const snapshot = await client.call<ControllerState>(method, params);
+      if (disposed) return false;
+      state.value = snapshot;
       error.value = '';
       return true;
     } catch (reason) {
+      if (disposed) return false;
       error.value = formatError(reason);
       ElMessage.error(error.value);
       return false;
@@ -116,13 +124,20 @@ export function useVoiceController() {
     stopInputReporter = installInputFocusReporter(client);
     try {
       await client.ready();
+      if (disposed) return;
       const identity = await client.call<{pluginId: string | null}>('ui.identity');
+      if (disposed) return;
       if (identity.pluginId !== PLUGIN_ID) throw new Error(t('errors.identityMismatch'));
       subscription = await client.subscribe<ControllerState>(CHANGE_EVENT, value => {
-        state.value = value;
+        if (!disposed) state.value = value;
       });
+      if (disposed) {
+        void subscription.unsubscribe().catch(() => {});
+        return;
+      }
       connected.value = true;
       await refresh();
+      if (disposed) return;
       pollTimer = window.setInterval(() => void refresh({silent: true}), 1000);
       window.parent.postMessage({
         type: 'reff:plugin-ready',
@@ -131,6 +146,7 @@ export function useVoiceController() {
         styled: true,
       }, '*');
     } catch (reason) {
+      if (disposed) return;
       error.value = formatError(reason);
       loading.value = false;
       ElMessage.error(error.value);
@@ -138,8 +154,11 @@ export function useVoiceController() {
   });
 
   onBeforeUnmount(() => {
+    disposed = true;
+    connected.value = false;
     if (pollTimer !== undefined) window.clearInterval(pollTimer);
-    void subscription?.unsubscribe();
+    // pagehide 时 SDK 可能已关闭原生通道；取消订阅仍会清理本地监听，关闭错误无需弹窗。
+    void subscription?.unsubscribe().catch(() => {});
     stopInputReporter?.();
     stopDevReload?.();
     client.dispose();

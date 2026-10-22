@@ -42,11 +42,11 @@ const blockedCount = computed(() => props.state?.config?.blockedSourcePrefixes?.
 <style scoped>
 .vc-status-summary { display: block; width: 100%; flex: 0 0 auto; padding: 18px 20px; border-bottom: 1px solid var(--vc-border); }
 .vc-status-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
-.vc-status-eyebrow { color: var(--vc-muted); font-size: 12px; }
+.vc-status-eyebrow { color: var(--vc-muted); font-size: var(--reff-font-size-xs, 12px); }
 .vc-status-summary :deep(.el-alert) { margin-bottom: 12px; }
-.vc-metric-grid { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--vc-border); border-radius: 6px; background: var(--vc-border); }
+.vc-metric-grid { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--vc-border); border-radius: var(--reff-corner-radius, 6px); background: var(--vc-border); }
 .vc-metric { display: flex; min-height: 62px; flex-direction: column; justify-content: center; padding: 10px 13px; background: var(--vc-surface); }
-.vc-metric span { color: var(--vc-muted); font-size: 12px; }
-.vc-metric strong { margin-top: 5px; font-size: 16px; font-weight: 650; }
+.vc-metric span { color: var(--vc-muted); font-size: var(--reff-font-size-xs, 12px); }
+.vc-metric strong { margin-top: 5px; font-size: var(--reff-font-size-lg, 16px); font-weight: 650; }
 @media (max-width: 760px) { .vc-metric-grid { grid-template-columns: repeat(2, minmax(100px, 1fr)); } }
 </style>

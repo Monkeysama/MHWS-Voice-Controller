@@ -277,24 +277,24 @@ onUnmounted(() => document.removeEventListener('wheel', handleSelectDropdownWhee
 <style scoped>
 .rule-editor { display: flex; min-width: 0; height: 100%; flex-direction: column; padding: 18px 20px; }
 .rule-editor-content { min-height: 0; flex: 1; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; touch-action: pan-y; }
-.blocked-panel { position: absolute; top: 18px; right: 20px; width: 320px; padding: 12px; border: 1px solid var(--vc-border); border-radius: 6px; background: var(--vc-surface); }
+.blocked-panel { position: absolute; top: 18px; right: 20px; width: 320px; padding: 12px; border: 1px solid var(--vc-border); border-radius: var(--reff-corner-radius, 6px); background: var(--vc-surface); }
 .blocked-add, .blocked-row { display: flex; align-items: center; gap: 8px; }
 .blocked-add { margin-bottom: 8px; }
-.blocked-row { justify-content: space-between; min-height: 32px; border-top: 1px solid var(--vc-border); }
+.blocked-row { justify-content: space-between; min-height: var(--reff-control-height, 32px); border-top: 1px solid var(--vc-border); }
 .blocked-row code { overflow: hidden; color: var(--vc-accent); text-overflow: ellipsis; white-space: nowrap; }
 .section-heading, .group-header, .group-identity, .new-group { display: flex; align-items: center; }
 .section-heading, .group-header { justify-content: space-between; gap: 12px; }
 .section-heading { margin-bottom: 14px; }
-.section-heading h2 { margin: 3px 0 0; font-size: 17px; letter-spacing: 0; }
-.eyebrow, .empty-group { color: var(--vc-muted); font-size: 12px; }
+.section-heading h2 { margin: 3px 0 0; font-size: var(--reff-font-size-xl, 17px); letter-spacing: 0; }
+.eyebrow, .empty-group { color: var(--vc-muted); font-size: var(--reff-font-size-xs, 12px); }
 .new-group { width: min(430px, 52%); gap: 8px; }
 .rule-group { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--vc-border); }
-.group-header { min-height: 56px; padding: 7px 10px; border: 1px solid var(--vc-border); border-radius: 6px; background: var(--vc-surface); cursor: pointer; transition: border-color 120ms ease, background-color 120ms ease; }
+.group-header { min-height: 56px; padding: 7px 10px; border: 1px solid var(--vc-border); border-radius: var(--reff-corner-radius, 6px); background: var(--vc-surface); cursor: pointer; transition: border-color 120ms ease, background-color 120ms ease; }
 .group-header:hover, .group-header:focus-visible { border-color: var(--vc-accent); background: var(--vc-accent-soft); outline: none; }
 .group-identity { min-width: 0; flex: 1; gap: 10px; }
 .group-name { overflow: hidden; color: var(--vc-text); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.group-toggle { width: 40px; min-width: 40px; height: 40px; padding: 0; border-color: transparent !important; background: transparent !important; }
-.group-toggle :deep(.el-icon) { font-size: 14px; }
+.group-toggle { width: var(--reff-control-height-lg, 40px); min-width: var(--reff-control-height-lg, 40px); height: var(--reff-control-height-lg, 40px); padding: 0; border-color: transparent !important; background: transparent !important; }
+.group-toggle :deep(.el-icon) { font-size: var(--reff-font-size-md, 14px); }
 .group-toggle:hover, .group-toggle:focus-visible { color: var(--vc-accent-strong); }
 .disabled-delete { display: inline-flex; cursor: not-allowed; }
 .group-paths { display: grid; gap: 6px; margin: 12px 0 2px 50px; color: var(--vc-muted); line-height: 1.6; }
@@ -302,10 +302,10 @@ onUnmounted(() => document.removeEventListener('wheel', handleSelectDropdownWhee
 .group-paths span { flex: none; }
 .group-paths code { overflow: hidden; color: var(--vc-accent); text-overflow: ellipsis; white-space: nowrap; }
 .spaced { margin-top: 14px; }
-.conflict-panel { margin-top: 18px; border: 1px solid var(--vc-border); border-radius: 6px; background: var(--vc-surface); }
+.conflict-panel { margin-top: 18px; border: 1px solid var(--vc-border); border-radius: var(--reff-corner-radius, 6px); background: var(--vc-surface); }
 .conflict-summary { display: flex; min-height: 56px; align-items: center; gap: 10px; padding: 7px 10px; cursor: pointer; font-weight: 600; }
 .conflict-summary::-webkit-details-marker { display: none; }
-.conflict-toggle { display: grid; width: 40px; min-width: 40px; height: 40px; place-items: center; color: var(--vc-muted); font-size: 14px; transition: color 120ms ease, transform 120ms ease; }
+.conflict-toggle { display: grid; width: var(--reff-control-height-lg, 40px); min-width: var(--reff-control-height-lg, 40px); height: var(--reff-control-height-lg, 40px); place-items: center; color: var(--vc-muted); font-size: var(--reff-font-size-md, 14px); transition: color 120ms ease, transform 120ms ease; }
 .conflict-toggle > svg { width: 14px; height: 14px; }
 .conflict-panel[open] > .conflict-summary .conflict-toggle { transform: rotate(90deg); }
 .conflict-summary > span { flex: 1; }
@@ -314,12 +314,12 @@ onUnmounted(() => document.removeEventListener('wheel', handleSelectDropdownWhee
 .conflict-summary:hover, .conflict-summary:focus-visible { background: var(--vc-accent-soft); outline: none; }
 .conflict-summary:hover .conflict-toggle, .conflict-summary:focus-visible .conflict-toggle { color: var(--vc-accent-strong); }
 .conflict-content { padding: 0 13px 4px; border-top: 1px solid var(--vc-border); }
-.conflict-meta { color: var(--vc-muted); font-size: 12px; }
+.conflict-meta { color: var(--vc-muted); font-size: var(--reff-font-size-xs, 12px); }
 .conflict-row { padding: 10px 0; border-bottom: 1px solid var(--vc-border); }
 .conflict-row:last-child { border-bottom: 0; }
 .conflict-row code { color: var(--vc-accent); }
 .conflict-entries { display: grid; gap: 6px; margin-top: 6px; }
-.conflict-entry { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.conflict-entry { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--reff-font-size-sm, 13px); }
 .conflict-entry.winner { font-weight: 600; }
 .rule-create { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(220px, 1fr) auto; gap: 8px; margin: 12px 0; }
 .rules, .rule-wrap { display: grid; gap: 8px; }
